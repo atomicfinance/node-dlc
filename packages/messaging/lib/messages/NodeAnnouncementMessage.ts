@@ -2,9 +2,15 @@ import { BufferReader, BufferWriter } from '@node-lightning/bufio';
 import { BitField } from '@node-lightning/core';
 import * as crypto from '@node-lightning/crypto';
 import { NodeFeatureFlags } from '@node-lightning/wire';
+import assert from 'assert';
 
 import { Address } from '../domain/Address';
 import { MessageType } from '../MessageType';
+import {
+  deserializeTlv,
+  ITlv,
+  serializeTlv,
+} from '../serialize/deserializeTlv';
 import { getTlv } from '../serialize/getTlv';
 import { IWireMessage } from './IWireMessage';
 
@@ -16,10 +22,14 @@ import { IWireMessage } from './IWireMessage';
 export class NodeAnnouncementMessage implements IWireMessage {
   public static type = MessageType.NodeAnnouncement;
 
-  public static deserialize(payload: Buffer) {
+  public static deserialize(
+    reader: Buffer | BufferReader,
+  ): NodeAnnouncementMessage {
     const instance = new NodeAnnouncementMessage();
-    const reader = new BufferReader(payload);
-    reader.readUInt16BE(); // read off type
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
+
+    const type = reader.readUInt16BE();
+    assert(type === this.type, `Expected NodeAnnouncement, got type ${type}`);
 
     instance.signature = reader.readBytes(64);
 
@@ -30,14 +40,18 @@ export class NodeAnnouncementMessage implements IWireMessage {
     instance.nodeId = reader.readBytes(33);
     instance.rgbColor = reader.readBytes(3);
     instance.alias = reader.readBytes(32);
-    instance.addresses = [];
 
-    reader.readUInt16BE(); // addr_len
+    instance.addresses = [];
+    const addressBytes = reader.readUInt16BE();
+    const address = Address.deserialize(reader.readBytes(addressBytes));
+    instance.addresses.push(address);
 
     while (!reader.eof) {
-      const address = Address.deserialize(getTlv(reader));
+      const buf = getTlv(reader);
+      const tlvReader = new BufferReader(buf);
+      const { type, length, body } = deserializeTlv(tlvReader);
 
-      instance.addresses.push(address);
+      instance.tlvs.push({ type, length, body });
     }
 
     return instance;
@@ -49,7 +63,7 @@ export class NodeAnnouncementMessage implements IWireMessage {
    * sha-256 hash of the remaining bytes.
    */
   public static hash(msg: NodeAnnouncementMessage): Buffer {
-    const bytes = msg.serialize().slice(66); // type + signature
+    const bytes = msg.serialize().slice(66); // remove type + signature
     return crypto.hash256(bytes);
   }
 
@@ -100,7 +114,9 @@ export class NodeAnnouncementMessage implements IWireMessage {
    */
   public addresses: Address[] = [];
 
-  public serialize() {
+  public tlvs: ITlv[] = [];
+
+  public serialize(): Buffer {
     const featuresBuffer = this.features.toBuffer();
     const featuresLen = featuresBuffer.length;
 
@@ -123,7 +139,7 @@ export class NodeAnnouncementMessage implements IWireMessage {
       33 + // node_id
       3 + // rgb_color
       32 + // alias
-      2 + // addresses
+      2 + // addressBytes
       addressBytes; // cumulative addr bytes
     const writer = new BufferWriter(Buffer.alloc(len));
 
@@ -138,6 +154,10 @@ export class NodeAnnouncementMessage implements IWireMessage {
     writer.writeUInt16BE(addressBytes);
     for (const addressBuffer of addressBuffers) {
       writer.writeBytes(addressBuffer);
+    }
+
+    for (const tlv of this.tlvs) {
+      serializeTlv(tlv, writer);
     }
 
     return writer.toBuffer();

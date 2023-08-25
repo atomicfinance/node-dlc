@@ -4,19 +4,26 @@ import {
   BufferWriter,
   StreamReader,
 } from '@node-lightning/bufio';
+import assert from 'assert';
 
 import { MessageType } from '../MessageType';
 import { IDlcMessage } from './DlcMessage';
+import { DlcTransactionsV0Pre163 } from './pre-163/DlcTransactions';
 
 export abstract class DlcTransactions {
-  public static deserialize(buf: Buffer, parseCets = true): DlcTransactionsV0 {
-    const reader = new BufferReader(buf);
+  public static deserialize(
+    reader: Buffer | BufferReader,
+    parseCets = true,
+  ): DlcTransactionsV0 {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    const type = Number(reader.readUInt16BE());
+    const tempReader = new BufferReader(reader.peakBytes());
+
+    const type = Number(tempReader.readUInt16BE());
 
     switch (type) {
       case MessageType.DlcTransactionsV0:
-        return DlcTransactionsV0.deserialize(buf, parseCets);
+        return DlcTransactionsV0.deserialize(reader, parseCets);
       default:
         throw new Error(`Dlc Transactions type must be DlcTransactionsV0`);
     }
@@ -38,19 +45,23 @@ export class DlcTransactionsV0 extends DlcTransactions implements IDlcMessage {
 
   /**
    * Deserializes an offer_dlc_v0 message
-   * @param buf
+   * @param reader
    */
-  public static deserialize(buf: Buffer, parseCets = true): DlcTransactionsV0 {
+  public static deserialize(
+    reader: Buffer | BufferReader,
+    parseCets = true,
+  ): DlcTransactionsV0 {
     const instance = new DlcTransactionsV0();
-    const reader = new BufferReader(buf);
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    reader.readUInt16BE(); // read type
+    const type = reader.readUInt16BE();
+    assert(type === this.type, `Expected DlcTransactionsV0, got type ${type}`);
 
     instance.contractId = reader.readBytes(32);
 
-    const fundTxLen = reader.readUInt16BE();
+    const fundTxLen = reader.readBigSize();
     instance.fundTx = Tx.decode(
-      StreamReader.fromBuffer(reader.readBytes(fundTxLen)),
+      StreamReader.fromBuffer(reader.readBytes(Number(fundTxLen))),
     );
 
     instance.fundTxVout = reader.readUInt32BE();
@@ -64,20 +75,20 @@ export class DlcTransactionsV0 extends DlcTransactions implements IDlcMessage {
 
     instance.fundBroadcastHeight = reader.readUInt32BE();
 
-    const refundTxLen = reader.readUInt16BE();
+    const refundTxLen = reader.readBigSize();
     instance.refundTx = Tx.decode(
-      StreamReader.fromBuffer(reader.readBytes(refundTxLen)),
+      StreamReader.fromBuffer(reader.readBytes(Number(refundTxLen))),
     );
 
     const numCets = reader.readBigSize(); // num_cets
     for (let i = 0; i < numCets; i++) {
-      const cetLen = reader.readUInt16BE();
+      const cetLen = reader.readBigSize();
       if (parseCets || i === 0) {
         instance.cets.push(
-          Tx.decode(StreamReader.fromBuffer(reader.readBytes(cetLen))),
+          Tx.decode(StreamReader.fromBuffer(reader.readBytes(Number(cetLen)))),
         );
       } else {
-        reader.readBytes(cetLen);
+        reader.readBytes(Number(cetLen));
       }
     }
 
@@ -97,6 +108,42 @@ export class DlcTransactionsV0 extends DlcTransactions implements IDlcMessage {
     return instance;
   }
 
+  public static fromPre163(dlcTxs: DlcTransactionsV0Pre163): DlcTransactionsV0 {
+    const instance = new DlcTransactionsV0();
+
+    instance.contractId = dlcTxs.contractId;
+    instance.fundTx = dlcTxs.fundTx;
+    instance.fundTxVout = dlcTxs.fundTxVout;
+    instance.fundEpoch = dlcTxs.fundEpoch;
+    instance.fundBroadcastHeight = dlcTxs.fundBroadcastHeight;
+    instance.refundTx = dlcTxs.refundTx;
+    instance.cets = dlcTxs.cets;
+    instance.closeEpoch = dlcTxs.closeEpoch;
+    instance.closeTxHash = dlcTxs.closeTxHash;
+    instance.closeType = dlcTxs.closeType;
+    instance.closeBroadcastHeight = dlcTxs.closeBroadcastHeight;
+
+    return instance;
+  }
+
+  public static toPre163(dlcTxs: DlcTransactionsV0): DlcTransactionsV0Pre163 {
+    const instance = new DlcTransactionsV0Pre163();
+
+    instance.contractId = dlcTxs.contractId;
+    instance.fundTx = dlcTxs.fundTx;
+    instance.fundTxVout = dlcTxs.fundTxVout;
+    instance.fundEpoch = dlcTxs.fundEpoch;
+    instance.fundBroadcastHeight = dlcTxs.fundBroadcastHeight;
+    instance.refundTx = dlcTxs.refundTx;
+    instance.cets = dlcTxs.cets;
+    instance.closeEpoch = dlcTxs.closeEpoch;
+    instance.closeTxHash = dlcTxs.closeTxHash;
+    instance.closeType = dlcTxs.closeType;
+    instance.closeBroadcastHeight = dlcTxs.closeBroadcastHeight;
+
+    return instance;
+  }
+
   /**
    * The type for offer_dlc_v0 message. offer_dlc_v0 = 42778
    */
@@ -108,7 +155,7 @@ export class DlcTransactionsV0 extends DlcTransactions implements IDlcMessage {
 
   public fundTxVout: number;
 
-  public fundEpoch: BlockEpoch = {
+  public fundEpoch: IBlockEpoch = {
     hash: Buffer.alloc(32),
     height: 0,
   };
@@ -119,7 +166,7 @@ export class DlcTransactionsV0 extends DlcTransactions implements IDlcMessage {
 
   public cets: Tx[] = [];
 
-  public closeEpoch: BlockEpoch = {
+  public closeEpoch: IBlockEpoch = {
     hash: Buffer.alloc(32),
     height: 0,
   };
@@ -135,7 +182,6 @@ export class DlcTransactionsV0 extends DlcTransactions implements IDlcMessage {
    */
   public toJSON(): IDlcTransactionsV0JSON {
     return {
-      type: this.type,
       contractId: this.contractId.toString('hex'),
       fundTx: this.fundTx.serialize().toString('hex'),
       fundTxVout: this.fundTxVout,
@@ -163,18 +209,18 @@ export class DlcTransactionsV0 extends DlcTransactions implements IDlcMessage {
     const writer = new BufferWriter();
     writer.writeUInt16BE(this.type);
     writer.writeBytes(this.contractId);
-    writer.writeUInt16BE(this.fundTx.serialize().length);
+    writer.writeBigSize(this.fundTx.serialize().length);
     writer.writeBytes(this.fundTx.serialize());
     writer.writeUInt32BE(this.fundTxVout);
     writer.writeBytes(this.fundEpoch.hash);
     writer.writeUInt32BE(this.fundEpoch.height);
     writer.writeUInt32BE(this.fundBroadcastHeight);
-    writer.writeUInt16BE(this.refundTx.serialize().length);
+    writer.writeBigSize(this.refundTx.serialize().length);
     writer.writeBytes(this.refundTx.serialize());
 
     writer.writeBigSize(this.cets.length);
     for (const cet of this.cets) {
-      writer.writeUInt16BE(cet.serialize().length);
+      writer.writeBigSize(cet.serialize().length);
       writer.writeBytes(cet.serialize());
     }
 
@@ -202,7 +248,6 @@ const closeTypeToStr = (closeType: CloseType): string => {
 };
 
 export interface IDlcTransactionsV0JSON {
-  type: number;
   contractId: string;
   fundTx: string;
   fundTxVout: number;
@@ -221,7 +266,7 @@ export interface IBlockEpochJSON {
   height: number;
 }
 
-export interface BlockEpoch {
+export interface IBlockEpoch {
   hash: Buffer;
   height: number;
 }

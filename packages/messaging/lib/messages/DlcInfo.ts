@@ -1,17 +1,21 @@
 import { BufferReader, BufferWriter } from '@node-lightning/bufio';
+import assert from 'assert';
 
 import { MessageType } from '../MessageType';
 import { IDlcMessage } from './DlcMessage';
+import { DlcInfoV0Pre163 } from './pre-163/DlcInfo';
 
 export abstract class DlcInfo {
-  public static deserialize(buf: Buffer): DlcInfoV0 {
-    const reader = new BufferReader(buf);
+  public static deserialize(reader: Buffer | BufferReader): DlcInfoV0 {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    const type = Number(reader.readUInt16BE());
+    const tempReader = new BufferReader(reader.peakBytes());
+
+    const type = Number(tempReader.readUInt16BE());
 
     switch (type) {
       case MessageType.DlcInfoV0:
-        return DlcInfoV0.deserialize(buf);
+        return DlcInfoV0.deserialize(reader);
       default:
         throw new Error(`DLC IDs message type must be DlcInfoV0`);
     }
@@ -30,13 +34,14 @@ export class DlcInfoV0 extends DlcInfo implements IDlcMessage {
 
   /**
    * Deserializes an dlc_ids_v0 message
-   * @param buf
+   * @param reader
    */
-  public static deserialize(buf: Buffer): DlcInfoV0 {
+  public static deserialize(reader: Buffer | BufferReader): DlcInfoV0 {
     const instance = new DlcInfoV0();
-    const reader = new BufferReader(buf);
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    reader.readUInt16BE(); // read type
+    const type = reader.readUInt16BE();
+    assert(type === this.type, `Expected DlcInfoV0, got type ${type}`);
 
     instance.numDlcOffers = reader.readUInt32BE();
     instance.numDlcAccepts = reader.readUInt32BE();
@@ -44,6 +49,32 @@ export class DlcInfoV0 extends DlcInfo implements IDlcMessage {
     instance.numDlcCancels = reader.readUInt32BE();
     instance.numDlcCloses = reader.readUInt32BE();
     instance.numDlcTransactions = reader.readUInt32BE();
+
+    return instance;
+  }
+
+  public static fromPre163(cancel: DlcInfoV0Pre163): DlcInfoV0 {
+    const instance = new DlcInfoV0();
+
+    instance.numDlcOffers = cancel.numDlcOffers;
+    instance.numDlcAccepts = cancel.numDlcAccepts;
+    instance.numDlcSigns = cancel.numDlcSigns;
+    instance.numDlcCancels = cancel.numDlcCancels;
+    instance.numDlcCloses = cancel.numDlcCloses;
+    instance.numDlcTransactions = cancel.numDlcTransactions;
+
+    return instance;
+  }
+
+  public static toPre163(cancel: DlcInfoV0): DlcInfoV0Pre163 {
+    const instance = new DlcInfoV0Pre163();
+
+    instance.numDlcOffers = cancel.numDlcOffers;
+    instance.numDlcAccepts = cancel.numDlcAccepts;
+    instance.numDlcSigns = cancel.numDlcSigns;
+    instance.numDlcCancels = cancel.numDlcCancels;
+    instance.numDlcCloses = cancel.numDlcCloses;
+    instance.numDlcTransactions = cancel.numDlcTransactions;
 
     return instance;
   }

@@ -1,67 +1,111 @@
 import { BufferReader, BufferWriter } from '@node-lightning/bufio';
+import assert from 'assert';
 
-import { MessageType } from '../MessageType';
-import { getTlv } from '../serialize/getTlv';
 import { IDlcMessage } from './DlcMessage';
-import { PayoutFunction, PayoutFunctionV0JSON } from './PayoutFunction';
+import { IPayoutFunctionJSON, PayoutFunction } from './PayoutFunction';
 import {
-  IRoundingIntervalsV0JSON,
-  RoundingIntervalsV0,
-} from './RoundingIntervalsV0';
+  ContractDescriptorPre163,
+  ContractDescriptorV0Pre163,
+  ContractDescriptorV1Pre163,
+} from './pre-163/ContractDescriptor';
+import { IRoundingIntervalsJSON, RoundingIntervals } from './RoundingIntervals';
 
+export enum ContractDescriptorType {
+  Enumerated = 0,
+  Numeric = 1,
+}
 export abstract class ContractDescriptor {
   public static deserialize(
-    buf: Buffer,
-  ): ContractDescriptorV0 | ContractDescriptorV1 {
-    const reader = new BufferReader(buf);
+    reader: Buffer | BufferReader,
+  ): EnumeratedContractDescriptor | NumericContractDescriptor {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    const type = Number(reader.readBigSize());
+    const tempReader = new BufferReader(reader.peakBytes());
+    const type = Number(tempReader.readBigSize());
 
     switch (type) {
-      case MessageType.ContractDescriptorV0:
-        return ContractDescriptorV0.deserialize(buf);
-      case MessageType.ContractDescriptorV1:
-        return ContractDescriptorV1.deserialize(buf);
+      case ContractDescriptorType.Enumerated:
+        return EnumeratedContractDescriptor.deserialize(reader);
+      case ContractDescriptorType.Numeric:
+        return NumericContractDescriptor.deserialize(reader);
       default:
         throw new Error(
-          `Contract Descriptor TLV type must be ContractDescriptorV0 or ContractDescriptorV1`,
+          `Contract Descriptor type must be Enumerated or Numeric`,
         );
+    }
+  }
+
+  public static fromPre163(
+    contractDescriptor: ContractDescriptorPre163,
+  ): ContractDescriptor {
+    if (contractDescriptor instanceof ContractDescriptorV0Pre163) {
+      return EnumeratedContractDescriptor.fromPre163(contractDescriptor);
+    } else if (contractDescriptor instanceof ContractDescriptorV1Pre163) {
+      return NumericContractDescriptor.fromPre163(contractDescriptor);
+    } else {
+      throw new Error(
+        'Contract Descriptor must be ContractDescriptorV0 or ContractDescriptorV1',
+      );
+    }
+  }
+
+  public static toPre163(
+    contractDescriptor: ContractDescriptor,
+  ): ContractDescriptorPre163 {
+    if (contractDescriptor instanceof EnumeratedContractDescriptor) {
+      return EnumeratedContractDescriptor.toPre163(contractDescriptor);
+    } else if (contractDescriptor instanceof NumericContractDescriptor) {
+      return NumericContractDescriptor.toPre163(contractDescriptor);
+    } else {
+      throw new Error(
+        'Contract Descriptor must be EnumeratedContractDescriptor or NumericContractDescriptor',
+      );
     }
   }
 
   public abstract type: number;
 
-  public abstract length: bigint;
-
-  public abstract toJSON(): ContractDescriptorV0JSON | ContractDescriptorV1JSON;
+  public abstract toJSON():
+    | IEnumContractDescriptorJSON
+    | INumericContractDescriptorJSON;
 
   public abstract serialize(): Buffer;
 }
 
 /**
- * ContractDescriptor V0 contains information about a contract's outcomes
+ * EnumeratedContractDescriptor contains information about a contract's outcomes
  * and their corresponding payouts.
  */
-export class ContractDescriptorV0
+export class EnumeratedContractDescriptor
   extends ContractDescriptor
   implements IDlcMessage {
-  public static type = MessageType.ContractDescriptorV0;
+  public static type = ContractDescriptorType.Enumerated;
 
   /**
-   * Deserializes an contract_descriptor_v0 message
-   * @param buf
+   * Deserializes an enumerated_contract_descriptor message
+   * @param reader
    */
-  public static deserialize(buf: Buffer): ContractDescriptorV0 {
-    const instance = new ContractDescriptorV0();
-    const reader = new BufferReader(buf);
+  public static deserialize(
+    reader: Buffer | BufferReader,
+  ): EnumeratedContractDescriptor {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    reader.readBigSize(); // read type
-    instance.length = reader.readBigSize();
-    reader.readBigSize(); // num_outcomes
+    const instance = new EnumeratedContractDescriptor();
 
-    while (!reader.eof) {
+    const type = Number(reader.readBigSize());
+    assert(
+      type === this.type,
+      `Expected ContractDescriptorType.Enumerated, got type ${type}`,
+    );
+
+    const numOutcomes = reader.readBigSize(); // num_outcomes
+
+    for (let i = 0; i < numOutcomes; i++) {
+      const strLen = reader.readBigSize();
+      const strBuf = reader.readBytes(Number(strLen));
+
       instance.outcomes.push({
-        outcome: reader.readBytes(32),
+        outcome: strBuf.toString('utf-8'),
         localPayout: reader.readUInt64BE(),
       });
     }
@@ -69,32 +113,61 @@ export class ContractDescriptorV0
     return instance;
   }
 
-  /**
-   * The type for contract_descriptor_v0 message. contract_descriptor_v0 = 42768
-   */
-  public type = ContractDescriptorV0.type;
+  public static fromPre163(
+    contractDescriptor: ContractDescriptorV0Pre163,
+  ): EnumeratedContractDescriptor {
+    const instance = new EnumeratedContractDescriptor();
 
-  public length: bigint;
+    instance.outcomes = contractDescriptor.outcomes.map((outcome) => {
+      return {
+        outcome: outcome.outcome.toString('utf8'),
+        localPayout: outcome.localPayout,
+      };
+    });
+
+    return instance;
+  }
+
+  public static toPre163(
+    contractDescriptor: EnumeratedContractDescriptor,
+  ): ContractDescriptorV0Pre163 {
+    const instance = new ContractDescriptorV0Pre163();
+
+    instance.outcomes = contractDescriptor.outcomes.map((outcome) => {
+      return {
+        outcome: Buffer.from(outcome.outcome, 'utf-8'),
+        localPayout: outcome.localPayout,
+      };
+    });
+
+    return instance;
+  }
+
+  /**
+   * The type for enumerated_contract_descriptor message
+   */
+  public type = EnumeratedContractDescriptor.type;
 
   public outcomes: IOutcome[] = [];
 
   /**
-   * Converts contract_descriptor_v0 to JSON
+   * Converts enumerated_contract_descriptor to JSON
    */
-  public toJSON(): ContractDescriptorV0JSON {
+  public toJSON(): IEnumContractDescriptorJSON {
     return {
-      type: this.type,
-      outcomes: this.outcomes.map((outcome) => {
-        return {
-          outcome: outcome.outcome.toString('hex'),
-          localPayout: Number(outcome.localPayout),
-        };
-      }),
+      enumeratedContractDescriptor: {
+        payouts: this.outcomes.map((payout) => {
+          return {
+            outcome: payout.outcome,
+            localPayout: Number(payout.localPayout),
+          };
+        }),
+      },
     };
   }
 
   /**
-   * Serializes the contract_descriptor_v0 message into a Buffer
+   * Serializes the enumerated_contract_descriptor message into a Buffer
    */
   public serialize(): Buffer {
     const writer = new BufferWriter();
@@ -104,11 +177,12 @@ export class ContractDescriptorV0
     dataWriter.writeBigSize(this.outcomes.length);
 
     for (const outcome of this.outcomes) {
-      dataWriter.writeBytes(outcome.outcome);
+      const outcomeBuf = Buffer.from(outcome.outcome, 'utf-8');
+      dataWriter.writeBigSize(outcomeBuf.length);
+      dataWriter.writeBytes(outcomeBuf);
       dataWriter.writeUInt64BE(outcome.localPayout);
     }
 
-    writer.writeBigSize(dataWriter.size);
     writer.writeBytes(dataWriter.toBuffer());
 
     return writer.toBuffer();
@@ -116,29 +190,64 @@ export class ContractDescriptorV0
 }
 
 /**
- * ContractDescriptor V1 contains information about a contract's outcomes
+ * NumericContractDescriptor contains information about a contract's outcomes
  * and their corresponding payouts.
  */
-export class ContractDescriptorV1
+export class NumericContractDescriptor
   extends ContractDescriptor
   implements IDlcMessage {
-  public static type = MessageType.ContractDescriptorV1;
+  public static type = ContractDescriptorType.Numeric;
 
   /**
    * Deserializes an contract_descriptor_v1 message
-   * @param buf
+   * @param reader
    */
-  public static deserialize(buf: Buffer): ContractDescriptorV1 {
-    const instance = new ContractDescriptorV1();
-    const reader = new BufferReader(buf);
+  public static deserialize(
+    reader: Buffer | BufferReader,
+  ): NumericContractDescriptor {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
+    const instance = new NumericContractDescriptor();
 
-    reader.readBigSize(); // read type
-    instance.length = reader.readBigSize();
+    const type = Number(reader.readBigSize());
+    assert(
+      type === this.type,
+      `Expected ContractDescriptorType.Numeric, got type ${type}`,
+    );
+
     instance.numDigits = reader.readUInt16BE(); // num_digits
+    instance.payoutFunction = PayoutFunction.deserialize(reader);
+    instance.roundingIntervals = RoundingIntervals.deserialize(reader);
 
-    instance.payoutFunction = PayoutFunction.deserialize(getTlv(reader));
-    instance.roundingIntervals = RoundingIntervalsV0.deserialize(
-      getTlv(reader),
+    return instance;
+  }
+
+  public static fromPre163(
+    contractDescriptor: ContractDescriptorV1Pre163,
+  ): NumericContractDescriptor {
+    const instance = new NumericContractDescriptor();
+
+    instance.numDigits = contractDescriptor.numDigits;
+    instance.payoutFunction = PayoutFunction.fromPre163(
+      contractDescriptor.payoutFunction,
+    );
+    instance.roundingIntervals = RoundingIntervals.fromPre163(
+      contractDescriptor.roundingIntervals,
+    );
+
+    return instance;
+  }
+
+  public static toPre163(
+    contractDescriptor: NumericContractDescriptor,
+  ): ContractDescriptorV1Pre163 {
+    const instance = new ContractDescriptorV1Pre163();
+
+    instance.numDigits = contractDescriptor.numDigits;
+    instance.payoutFunction = PayoutFunction.toPre163(
+      contractDescriptor.payoutFunction,
+    );
+    instance.roundingIntervals = RoundingIntervals.toPre163(
+      contractDescriptor.roundingIntervals,
     );
 
     return instance;
@@ -147,15 +256,13 @@ export class ContractDescriptorV1
   /**
    * The type for contract_descriptor_v1 message. contract_descriptor_v1 = 42784
    */
-  public type = ContractDescriptorV1.type;
-
-  public length: bigint;
+  public type = NumericContractDescriptor.type;
 
   public numDigits: number;
 
   public payoutFunction: PayoutFunction;
 
-  public roundingIntervals: RoundingIntervalsV0;
+  public roundingIntervals: RoundingIntervals;
 
   /**
    * Validates correctness of all fields in the message
@@ -169,12 +276,13 @@ export class ContractDescriptorV1
   /**
    * Converts contract_descriptor_v1 to JSON
    */
-  public toJSON(): ContractDescriptorV1JSON {
+  public toJSON(): INumericContractDescriptorJSON {
     return {
-      type: this.type,
-      numDigits: this.numDigits,
-      payoutFunction: this.payoutFunction.toJSON(),
-      roundingIntervals: this.roundingIntervals.toJSON(),
+      numericOutcomeContractDescriptor: {
+        numDigits: this.numDigits,
+        payoutFunction: this.payoutFunction.toJSON(),
+        roundingIntervals: this.roundingIntervals.toJSON(),
+      },
     };
   }
 
@@ -190,7 +298,6 @@ export class ContractDescriptorV1
     dataWriter.writeBytes(this.payoutFunction.serialize());
     dataWriter.writeBytes(this.roundingIntervals.serialize());
 
-    writer.writeBigSize(dataWriter.size);
     writer.writeBytes(dataWriter.toBuffer());
 
     return writer.toBuffer();
@@ -198,7 +305,7 @@ export class ContractDescriptorV1
 }
 
 interface IOutcome {
-  outcome: Buffer;
+  outcome: string;
   localPayout: bigint;
 }
 
@@ -207,14 +314,16 @@ interface IOutcomeJSON {
   localPayout: number;
 }
 
-export interface ContractDescriptorV0JSON {
-  type: number;
-  outcomes: IOutcomeJSON[];
+export interface IEnumContractDescriptorJSON {
+  enumeratedContractDescriptor: {
+    payouts: IOutcomeJSON[];
+  };
 }
 
-export interface ContractDescriptorV1JSON {
-  type: number;
-  numDigits: number;
-  payoutFunction: PayoutFunctionV0JSON;
-  roundingIntervals: IRoundingIntervalsV0JSON;
+export interface INumericContractDescriptorJSON {
+  numericOutcomeContractDescriptor: {
+    numDigits: number;
+    payoutFunction: IPayoutFunctionJSON;
+    roundingIntervals: IRoundingIntervalsJSON;
+  };
 }

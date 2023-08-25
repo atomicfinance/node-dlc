@@ -1,11 +1,12 @@
 import {
-  MessageType,
-  PayoutFunctionV0,
+  PayoutCurvePieceType,
+  PayoutFunction,
   PolynomialPayoutCurvePiece,
-  RoundingIntervalsV0,
-} from '@node-dlc/messaging';
+  RoundingIntervals
+} from "@node-dlc/messaging";
 import BigNumber from 'bignumber.js';
 import { expect } from 'chai';
+import { Value } from '@node-dlc/bitcoin';
 
 import { HyperbolaPayoutCurve } from '../../lib';
 import { LinearPayout } from '../../lib/dlc/finance/LinearPayout';
@@ -95,7 +96,7 @@ describe('PolynomialPayoutCurve', () => {
       const curve = new PolynomialPayoutCurve(points);
       const piece = curve.toPayoutCurvePiece();
       expect(piece).to.deep.equal({
-        type: MessageType.PolynomialPayoutCurvePiece,
+        type: PayoutCurvePieceType.PolynomialPayoutCurvePiece,
         points: [
           {
             eventOutcome: BigInt(1),
@@ -184,7 +185,7 @@ describe('PolynomialPayoutCurve', () => {
       );
 
       const intervals = [{ beginInterval: 0n, roundingMod: 1n }];
-      const roundingIntervals = new RoundingIntervalsV0();
+      const roundingIntervals = new RoundingIntervals();
       roundingIntervals.intervals = intervals;
 
       const payouts = PolynomialPayoutCurve.computePayouts(
@@ -237,7 +238,7 @@ describe('PolynomialPayoutCurve', () => {
       );
 
       const intervals = [{ beginInterval: 0n, roundingMod: 2n }];
-      const roundingIntervals = new RoundingIntervalsV0();
+      const roundingIntervals = new RoundingIntervals();
       roundingIntervals.intervals = intervals;
 
       const payouts = PolynomialPayoutCurve.computePayouts(
@@ -277,13 +278,13 @@ describe('PolynomialPayoutCurve', () => {
     it('should fail if < 1 payout function pieces', () => {
       const maxPayout = 60n;
 
-      const payoutFunction = new PayoutFunctionV0();
+      const payoutFunction = new PayoutFunction();
       payoutFunction.pieces = [];
-      payoutFunction.endpoint0 = 0n;
-      payoutFunction.endpointPayout0 = 0n;
+      payoutFunction.lastEndpoint.eventOutcome = 0n;
+      payoutFunction.lastEndpoint.outcomePayout = Value.fromSats(0n);
 
       const intervals = [{ beginInterval: 0n, roundingMod: 1n }];
-      const roundingIntervals = new RoundingIntervalsV0();
+      const roundingIntervals = new RoundingIntervals();
       roundingIntervals.intervals = intervals;
 
       expect(() => {
@@ -311,18 +312,21 @@ describe('PolynomialPayoutCurve', () => {
       const pieces = [
         {
           payoutCurvePiece: hyperbola,
-          endpoint: 2n,
-          endpointPayout: 2n,
-          extraPrecision: 0,
+          endPoint: {
+            eventOutcome: 0n,
+            outcomePayout: Value.fromSats(0n),
+            extraPrecision: 0,
+          },
         },
       ];
-      const payoutFunction = new PayoutFunctionV0();
+      const payoutFunction = new PayoutFunction();
       payoutFunction.pieces = pieces;
-      payoutFunction.endpoint0 = 0n;
-      payoutFunction.endpointPayout0 = 0n;
+      payoutFunction.lastEndpoint.eventOutcome = 2n;
+      payoutFunction.lastEndpoint.outcomePayout = Value.fromSats(2n);
+      payoutFunction.lastEndpoint.extraPrecision = 0;
 
       const intervals = [{ beginInterval: 0n, roundingMod: 1n }];
-      const roundingIntervals = new RoundingIntervalsV0();
+      const roundingIntervals = new RoundingIntervals();
       roundingIntervals.intervals = intervals;
 
       expect(() => {

@@ -1,17 +1,21 @@
 import { BufferReader, BufferWriter } from '@node-lightning/bufio';
+import assert from 'assert';
 
 import { MessageType } from '../MessageType';
 import { IDlcMessage } from './DlcMessage';
+import { OrderIrcInfoV0Pre163 } from './pre-163/OrderIrcInfo';
 
 export abstract class OrderIrcInfo {
-  public static deserialize(buf: Buffer): OrderIrcInfo {
-    const reader = new BufferReader(buf);
+  public static deserialize(reader: Buffer | BufferReader): OrderIrcInfo {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    const type = Number(reader.readBigSize());
+    const tempReader = new BufferReader(reader.peakBytes());
+
+    const type = Number(tempReader.readBigSize());
 
     switch (type) {
       case MessageType.OrderIrcInfoV0:
-        return OrderIrcInfoV0.deserialize(buf);
+        return OrderIrcInfoV0.deserialize(reader);
       default:
         throw new Error(`Order irc info TLV type must be OrderIrcInfoV0`);
     }
@@ -34,15 +38,16 @@ export class OrderIrcInfoV0 extends OrderIrcInfo implements IDlcMessage {
 
   /**
    * Deserializes an offer_dlc_v0 message
-   * @param buf
+   * @param reader
    */
-  public static deserialize(buf: Buffer): OrderIrcInfoV0 {
+  public static deserialize(reader: Buffer | BufferReader): OrderIrcInfoV0 {
     const instance = new OrderIrcInfoV0();
-    const reader = new BufferReader(buf);
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    reader.readBigSize(); // read type
-    instance.length = reader.readBigSize();
+    const type = Number(reader.readBigSize());
+    assert(type === this.type, `Expected OrderIrcInfoV0, got type ${type}`);
 
+    reader.readBigSize(); // read off length
     const nickLength = reader.readBigSize();
     const nickBuf = reader.readBytes(Number(nickLength));
     instance.nick = nickBuf.toString();
@@ -52,12 +57,28 @@ export class OrderIrcInfoV0 extends OrderIrcInfo implements IDlcMessage {
     return instance;
   }
 
+  public static fromPre163(ircInfo: OrderIrcInfoV0Pre163): OrderIrcInfoV0 {
+    const instance = new OrderIrcInfoV0();
+
+    instance.nick = ircInfo.nick;
+    instance.pubKey = ircInfo.pubKey;
+
+    return instance;
+  }
+
+  public static toPre163(ircInfo: OrderIrcInfoV0): OrderIrcInfoV0Pre163 {
+    const instance = new OrderIrcInfoV0Pre163();
+
+    instance.nick = ircInfo.nick;
+    instance.pubKey = ircInfo.pubKey;
+
+    return instance;
+  }
+
   /**
    * The type for order_metadata_v0 message. order_metadata_v0 = 62774
    */
   public type = OrderIrcInfoV0.type;
-
-  public length: bigint;
 
   public nick: string;
 
@@ -68,7 +89,6 @@ export class OrderIrcInfoV0 extends OrderIrcInfo implements IDlcMessage {
    */
   public toJSON(): IOrderIrcInfoJSON {
     return {
-      type: this.type,
       nick: this.nick,
       pubKey: this.pubKey.toString('hex'),
     };
@@ -82,11 +102,13 @@ export class OrderIrcInfoV0 extends OrderIrcInfo implements IDlcMessage {
     writer.writeBigSize(this.type);
 
     const dataWriter = new BufferWriter();
+
     dataWriter.writeBigSize(this.nick.length);
     dataWriter.writeBytes(Buffer.from(this.nick));
     dataWriter.writeBytes(this.pubKey);
 
     writer.writeBigSize(dataWriter.size);
+
     writer.writeBytes(dataWriter.toBuffer());
 
     return writer.toBuffer();
@@ -94,7 +116,6 @@ export class OrderIrcInfoV0 extends OrderIrcInfo implements IDlcMessage {
 }
 
 export interface IOrderIrcInfoJSON {
-  type: number;
   nick: string;
   pubKey: string;
 }

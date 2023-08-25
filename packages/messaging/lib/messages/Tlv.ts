@@ -3,11 +3,11 @@ import { BufferReader, BufferWriter } from '@node-lightning/bufio';
 export class Tlv {
   /**
    * Deserializes an tlv message
-   * @param buf
+   * @param reader
    */
-  public static deserialize(buf: Buffer): Tlv {
+  public static deserialize(reader: Buffer | BufferReader): Tlv {
     const instance = new Tlv();
-    const reader = new BufferReader(buf);
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
     instance.type = Number(reader.readBigSize()); // read type
     instance.length = reader.readBigSize();

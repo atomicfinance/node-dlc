@@ -1,4 +1,4 @@
-import { FundingInput, FundingInputV0, MessageType } from '@node-dlc/messaging';
+import { FundingInput } from '@node-dlc/messaging';
 
 export class DualFundingTxFinalizer {
   constructor(
@@ -16,12 +16,8 @@ export class DualFundingTxFinalizer {
     payoutSPK: Buffer,
     changeSPK: Buffer,
   ): IFees {
-    _inputs.forEach((input) => {
-      if (input.type !== MessageType.FundingInputV0)
-        throw Error('FundingInput must be V0');
-    });
-    const inputs: FundingInputV0[] = _inputs.map(
-      (input) => input as FundingInputV0,
+    const inputs: FundingInput[] = _inputs.map(
+      (input) => input as FundingInput,
     );
     // https://github.com/discreetlogcontracts/dlcspecs/blob/8ee4bbe816c9881c832b1ce320b9f14c72e3506f/Transactions.md#expected-weight-of-the-contract-execution-or-refund-transaction
     const futureFeeWeight = 249 + 4 * payoutSPK.length;
@@ -92,12 +88,8 @@ export class DualClosingTxFinalizer {
   ) {}
 
   private computeFees(payoutSPK: Buffer, _inputs: FundingInput[] = []): bigint {
-    _inputs.forEach((input) => {
-      if (input.type !== MessageType.FundingInputV0)
-        throw Error('FundingInput must be V0');
-    });
-    const inputs: FundingInputV0[] = _inputs.map(
-      (input) => input as FundingInputV0,
+    const inputs: FundingInput[] = _inputs.map(
+      (input) => input as FundingInput,
     );
     // https://gist.github.com/matthewjablack/08c36baa513af9377508111405b22e03
     const inputWeight = inputs.reduce((total, input) => {

@@ -1,6 +1,6 @@
 {
   "name": "@node-dlc/messaging",
-  "version": "0.21.4",
+  "version": "0.21.5",
   "description": "DLC Messaging Protocol",
   "scripts": {
     "test": "../../node_modules/.bin/nyc --reporter=lcov --reporter=text --extension=.ts ../../node_modules/.bin/mocha --require ts-node/register --recursive \"__tests__/**/*.spec.*\"",
@@ -22,13 +22,15 @@
     "url": "git+https://github.com/atomicfinance/node-dlc.git"
   },
   "dependencies": {
+    "@node-dlc/bitcoin": "^0.21.5",
     "@node-lightning/bitcoin": "0.26.1",
     "@node-lightning/bufio": "0.26.1",
     "@node-lightning/checksum": "0.26.1",
     "@node-lightning/wire": "0.26.1",
     "bip-schnorr": "0.6.3",
     "bitcoin-networks": "^1.0.0",
-    "bitcoinjs-lib": "5.2.0"
+    "bitcoinjs-lib": "5.2.0",
+    "class-validator": "0.13.2"
   },
   "devDependencies": {
     "@node-lightning/logger": "0.26.1",

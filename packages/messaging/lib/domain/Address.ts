@@ -1,26 +1,35 @@
 import { BufferReader, BufferWriter } from '@node-lightning/bufio';
 
-import { MessageType } from '../MessageType';
+export enum AddressType {
+  IpV4 = 1,
+}
 
 export class Address {
-  public static type = MessageType.NodeAnnouncementAddress;
+  public static type = AddressType.IpV4;
 
-  public static deserialize(buf: Buffer) {
+  public static deserialize(buf: Buffer): Address {
     const reader = new BufferReader(buf);
-    reader.readBigSize(); // read off type
-    reader.readBigSize(); // read size
+    const type = reader.readBigSize(); // read off type
 
-    const hostLen = reader.readBigSize();
-    const hostBuf = reader.readBytes(Number(hostLen));
-    const host = hostBuf.toString();
-    const port = reader.readUInt16BE();
-
-    const instance = new Address(host, port);
+    let hostBuf: Buffer;
+    let port: number;
+    let instance: Address;
+    switch (Number(type)) {
+      case AddressType.IpV4:
+        hostBuf = reader.readBytes(4);
+        port = reader.readUInt16BE();
+        instance = new Address(this.ipv4StringFromBuffer(hostBuf), port);
+        break;
+      default:
+        throw new Error(
+          `Node announcement message's address type must be IpV4`,
+        );
+    }
 
     return instance;
   }
 
-  public type = Address.type;
+  public type = AddressType.IpV4;
 
   /**
    * String notation representation of the host
@@ -40,7 +49,7 @@ export class Address {
     this.port = port;
   }
 
-  public toString() {
+  public toString(): string {
     return `${this.host}:${this.port}`;
   }
 
@@ -50,15 +59,27 @@ export class Address {
   public serialize(): Buffer {
     const writer = new BufferWriter();
     writer.writeBigSize(this.type);
+    writer.writeBytes(this.ipv4StringToBuffer(this.host));
+    writer.writeUInt16BE(this.port);
 
-    const dataWriter = new BufferWriter();
-    dataWriter.writeBigSize(this.host.length);
-    dataWriter.writeBytes(Buffer.from(this.host));
-    dataWriter.writeUInt16BE(this.port);
+    return writer.toBuffer();
+  }
 
-    writer.writeBigSize(dataWriter.size);
-    writer.writeBytes(dataWriter.toBuffer());
+  /**
+   * Converts a bytes buffer IPv4 host into string notation
+   * of the format x.x.x.x where each x is an 8-bit integer.
+   */
+  private static ipv4StringFromBuffer(bytes: Buffer): string {
+    return bytes.join('.');
+  }
 
+  /**
+   * Converts an IPv4 host string of the format x.x.x.x where
+   * each x is an 8-bit integer into a bytes buffer
+   */
+  private ipv4StringToBuffer(host: string): Buffer {
+    const writer = new BufferWriter();
+    host.split('.').map((val) => writer.writeUInt8(parseInt(val, 10)));
     return writer.toBuffer();
   }
 }

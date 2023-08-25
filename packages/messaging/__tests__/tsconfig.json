@@ -4,5 +4,5 @@
     "noEmit": true
   },
   "include": ["**/*.ts"],
-  "exclude": []
+  "exclude": [],
 }

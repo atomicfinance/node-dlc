@@ -1,9 +1,10 @@
 import { Value } from '@node-dlc/bitcoin';
 import {
-  ContractDescriptorV1,
-  ContractInfoV0,
-  OracleAnnouncementV0,
-  PayoutFunctionV0,
+  NumericContractDescriptor,
+  SingleContractInfo,
+  OracleAnnouncementV0Pre167,
+  PayoutFunction,
+  DigitDecompositionEventDescriptorV0Pre167,
 } from '@node-dlc/messaging';
 import { BitcoinNetworks } from 'bitcoin-networks';
 import { expect } from 'chai';
@@ -17,6 +18,7 @@ import {
   computeRoundingModulus,
   UNIT_MULTIPLIER,
 } from '../../../lib';
+import BN from 'bignumber.js';
 
 describe('OrderOffer Builder', () => {
   describe('buildCoveredCallOrderOffer', () => {
@@ -29,7 +31,7 @@ describe('OrderOffer Builder', () => {
       'hex',
     );
 
-    const oracleAnnouncement = OracleAnnouncementV0.deserialize(
+    const oracleAnnouncement = OracleAnnouncementV0Pre167.deserialize(
       oracleAnnouncementBuf,
     );
 
@@ -109,7 +111,7 @@ describe('OrderOffer Builder', () => {
       'hex',
     );
 
-    const oracleAnnouncement = OracleAnnouncementV0.deserialize(
+    const oracleAnnouncement = OracleAnnouncementV0Pre167.deserialize(
       oracleAnnouncementBuf,
     );
 
@@ -137,31 +139,65 @@ describe('OrderOffer Builder', () => {
           network,
         );
 
-        const payoutCurvePieces = (((orderOffer.contractInfo as ContractInfoV0)
-          .contractDescriptor as ContractDescriptorV1)
-          .payoutFunction as PayoutFunctionV0).pieces;
+        const payoutCurvePieces = (((orderOffer.contractInfo as SingleContractInfo)
+          .contractDescriptor as NumericContractDescriptor)
+          .payoutFunction as PayoutFunction).pieces;
 
         expect(() => orderOffer.validate()).to.not.throw(Error);
         expect(orderOffer.contractInfo.totalCollateral).to.equal(
           contractSize.sats,
         );
-        expect(orderOffer.offerCollateralSatoshis).to.equal(
+        expect(orderOffer.offerCollateral).to.equal(
           contractSize.sats - (contractSize.sats * maxGain.sats) / BigInt(1e8),
         );
-        expect(payoutCurvePieces[0].endpoint).to.equal(
+        // Expect first piece endpoint outcome to equal minOutcome
+        expect(payoutCurvePieces[0].endPoint.eventOutcome).to.equal(BigInt(0));
+        // Expect second piece endpoint outcome to equal startOutcome
+        expect(payoutCurvePieces[1].endPoint.eventOutcome).to.equal(
           (defaultContractSize.sats - maxLoss.sats) /
             BigInt(UNIT_MULTIPLIER[unit]),
         );
-        expect(payoutCurvePieces[1].endpoint).to.equal(
+        // Expect third piece endpoint outcome to equal endOutcome
+        expect(payoutCurvePieces[2].endPoint.eventOutcome).to.equal(
           (defaultContractSize.sats + maxGain.sats) /
             BigInt(UNIT_MULTIPLIER[unit]),
         );
-        expect(payoutCurvePieces[0].endpointPayout).to.equal(
+        // Max outcome limited by the oracle
+        const maxOutcome = BigInt(
+          new BN(
+            (oracleAnnouncement.oracleEvent
+              .eventDescriptor as DigitDecompositionEventDescriptorV0Pre167).base,
+          )
+            .pow(
+              (oracleAnnouncement.oracleEvent
+                .eventDescriptor as DigitDecompositionEventDescriptorV0Pre167)
+                .nbDigits,
+            )
+            .minus(1)
+            .toString(10),
+        );
+        // Expect payout function endpoint outcome to equal maxOutcome
+        expect(
+          (((orderOffer.contractInfo as SingleContractInfo)
+            .contractDescriptor as NumericContractDescriptor)
+            .payoutFunction as PayoutFunction).lastEndpoint.eventOutcome,
+        ).to.equal(maxOutcome);
+        // Expect first piece endpoint payout to equal min payout
+        expect(payoutCurvePieces[0].endPoint.outcomePayout.sats).to.equal(
           contractSize.sats -
             (maxLoss.sats * contractSize.sats) / BigInt(1e8) -
             (maxGain.sats * contractSize.sats) / BigInt(1e8),
         );
-        expect(payoutCurvePieces[1].endpointPayout).to.equal(contractSize.sats);
+        // Expect second piece endpoint payout to equal min payout
+        expect(payoutCurvePieces[1].endPoint.outcomePayout.sats).to.equal(
+          contractSize.sats -
+            (maxLoss.sats * contractSize.sats) / BigInt(1e8) -
+            (maxGain.sats * contractSize.sats) / BigInt(1e8),
+        );
+        // Expect second piece endpoint payout to equal max payout
+        expect(payoutCurvePieces[2].endPoint.outcomePayout.sats).to.equal(
+          contractSize.sats,
+        );
       });
     }
 
@@ -192,31 +228,65 @@ describe('OrderOffer Builder', () => {
         offerFees,
       );
 
-      const payoutCurvePieces = (((orderOffer.contractInfo as ContractInfoV0)
-        .contractDescriptor as ContractDescriptorV1)
-        .payoutFunction as PayoutFunctionV0).pieces;
+      const payoutCurvePieces = (((orderOffer.contractInfo as SingleContractInfo)
+        .contractDescriptor as NumericContractDescriptor)
+        .payoutFunction as PayoutFunction).pieces;
 
       expect(() => orderOffer.validate()).to.not.throw(Error);
       expect(orderOffer.contractInfo.totalCollateral).to.equal(
         contractSize.sats,
       );
-      expect(orderOffer.offerCollateralSatoshis).to.equal(
+      expect(orderOffer.offerCollateral).to.equal(
         contractSize.sats - (contractSize.sats * maxGain.sats) / BigInt(1e8),
       );
-      expect(payoutCurvePieces[0].endpoint).to.equal(
+      // Expect first piece endpoint outcome to equal minOutcome
+      expect(payoutCurvePieces[0].endPoint.eventOutcome).to.equal(BigInt(0));
+      // Expect second piece endpoint outcome to equal startOutcome plus offeror fees
+      expect(payoutCurvePieces[1].endPoint.eventOutcome).to.equal(
         (defaultContractSize.sats - maxLoss.sats + offerFees.sats) /
           BigInt(UNIT_MULTIPLIER[unit]),
       );
-      expect(payoutCurvePieces[1].endpoint).to.equal(
+      // Expect third piece endpoint outcome to equal endOutcome plus offeror fees
+      expect(payoutCurvePieces[2].endPoint.eventOutcome).to.equal(
         (defaultContractSize.sats + maxGain.sats + offerFees.sats) /
           BigInt(UNIT_MULTIPLIER[unit]),
       );
-      expect(payoutCurvePieces[0].endpointPayout).to.equal(
+      // Max outcome limited by the oracle
+      const maxOutcome = BigInt(
+        new BN(
+          (oracleAnnouncement.oracleEvent
+            .eventDescriptor as DigitDecompositionEventDescriptorV0Pre167).base,
+        )
+          .pow(
+            (oracleAnnouncement.oracleEvent
+              .eventDescriptor as DigitDecompositionEventDescriptorV0Pre167)
+              .nbDigits,
+          )
+          .minus(1)
+          .toString(10),
+      );
+      // Expect payout function endpoint outcome to equal maxOutcome
+      expect(
+        (((orderOffer.contractInfo as SingleContractInfo)
+          .contractDescriptor as NumericContractDescriptor)
+          .payoutFunction as PayoutFunction).lastEndpoint.eventOutcome,
+      ).to.equal(maxOutcome);
+      // Expect first piece endpoint payout to equal min payout
+      expect(payoutCurvePieces[0].endPoint.outcomePayout.sats).to.equal(
         contractSize.sats -
           (maxLoss.sats * contractSize.sats) / BigInt(1e8) -
           (maxGain.sats * contractSize.sats) / BigInt(1e8),
       );
-      expect(payoutCurvePieces[1].endpointPayout).to.equal(contractSize.sats);
+      // Expect second piece endpoint payout to equal min payout
+      expect(payoutCurvePieces[1].endPoint.outcomePayout.sats).to.equal(
+        contractSize.sats -
+          (maxLoss.sats * contractSize.sats) / BigInt(1e8) -
+          (maxGain.sats * contractSize.sats) / BigInt(1e8),
+      );
+      // Expect second piece endpoint payout to equal max payout
+      expect(payoutCurvePieces[2].endPoint.outcomePayout.sats).to.equal(
+        contractSize.sats,
+      );
     });
 
     it('should build a CSO OrderOffer and shift the payout curve correctly for acceptor fees', () => {
@@ -246,31 +316,65 @@ describe('OrderOffer Builder', () => {
         acceptFees,
       );
 
-      const payoutCurvePieces = (((orderOffer.contractInfo as ContractInfoV0)
-        .contractDescriptor as ContractDescriptorV1)
-        .payoutFunction as PayoutFunctionV0).pieces;
+      const payoutCurvePieces = (((orderOffer.contractInfo as SingleContractInfo)
+        .contractDescriptor as NumericContractDescriptor)
+        .payoutFunction as PayoutFunction).pieces;
 
       expect(() => orderOffer.validate()).to.not.throw(Error);
       expect(orderOffer.contractInfo.totalCollateral).to.equal(
         contractSize.sats,
       );
-      expect(orderOffer.offerCollateralSatoshis).to.equal(
+      expect(orderOffer.offerCollateral).to.equal(
         contractSize.sats - (contractSize.sats * maxGain.sats) / BigInt(1e8),
       );
-      expect(payoutCurvePieces[0].endpoint).to.equal(
+      // Expect first piece endpoint outcome to equal minOutcome
+      expect(payoutCurvePieces[0].endPoint.eventOutcome).to.equal(BigInt(0));
+      // Expect second piece endpoint outcome to equal startOutcome minus acceptFees
+      expect(payoutCurvePieces[1].endPoint.eventOutcome).to.equal(
         (defaultContractSize.sats - maxLoss.sats - acceptFees.sats) /
           BigInt(UNIT_MULTIPLIER[unit]),
       );
-      expect(payoutCurvePieces[1].endpoint).to.equal(
+      // Expect third piece endpoint outcome to equal endOutcome minus acceptFees
+      expect(payoutCurvePieces[2].endPoint.eventOutcome).to.equal(
         (defaultContractSize.sats + maxGain.sats - acceptFees.sats) /
           BigInt(UNIT_MULTIPLIER[unit]),
       );
-      expect(payoutCurvePieces[0].endpointPayout).to.equal(
+      // Max outcome limited by the oracle
+      const maxOutcome = BigInt(
+        new BN(
+          (oracleAnnouncement.oracleEvent
+            .eventDescriptor as DigitDecompositionEventDescriptorV0Pre167).base,
+        )
+          .pow(
+            (oracleAnnouncement.oracleEvent
+              .eventDescriptor as DigitDecompositionEventDescriptorV0Pre167)
+              .nbDigits,
+          )
+          .minus(1)
+          .toString(10),
+      );
+      // Expect payout function endpoint outcome to equal maxOutcome
+      expect(
+        (((orderOffer.contractInfo as SingleContractInfo)
+          .contractDescriptor as NumericContractDescriptor)
+          .payoutFunction as PayoutFunction).lastEndpoint.eventOutcome,
+      ).to.equal(maxOutcome);
+      // Expect first piece endpoint payout to equal min payout
+      expect(payoutCurvePieces[0].endPoint.outcomePayout.sats).to.equal(
         contractSize.sats -
           (maxLoss.sats * contractSize.sats) / BigInt(1e8) -
           (maxGain.sats * contractSize.sats) / BigInt(1e8),
       );
-      expect(payoutCurvePieces[1].endpointPayout).to.equal(contractSize.sats);
+      // Expect second piece endpoint payout to equal min payout
+      expect(payoutCurvePieces[1].endPoint.outcomePayout.sats).to.equal(
+        contractSize.sats -
+          (maxLoss.sats * contractSize.sats) / BigInt(1e8) -
+          (maxGain.sats * contractSize.sats) / BigInt(1e8),
+      );
+      // Expect second piece endpoint payout to equal max payout
+      expect(payoutCurvePieces[2].endPoint.outcomePayout.sats).to.equal(
+        contractSize.sats,
+      );
     });
 
     it('should build a CSO OrderOffer with contractSize 0', () => {

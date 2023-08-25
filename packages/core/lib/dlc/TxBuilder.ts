@@ -1,8 +1,7 @@
 import {
   DlcAcceptWithoutSigs,
   DlcOfferV0,
-  FundingInputV0,
-  MessageType,
+  FundingInput,
 } from '@node-dlc/messaging';
 import {
   LockTime,
@@ -43,8 +42,8 @@ export class DlcTxBuilder {
           );
     const witScript = Script.p2wshLock(multisigScript);
 
-    const offerInput = this.dlcOffer.offerCollateralSatoshis;
-    const acceptInput = this.dlcAccept.acceptCollateralSatoshis;
+    const offerInput = this.dlcOffer.offerCollateral;
+    const acceptInput = this.dlcAccept.acceptCollateral;
 
     const totalInput = offerInput + acceptInput;
 
@@ -58,12 +57,8 @@ export class DlcTxBuilder {
       this.dlcOffer.feeRatePerVb,
     );
 
-    this.dlcOffer.fundingInputs.forEach((input) => {
-      if (input.type !== MessageType.FundingInputV0)
-        throw Error('FundingInput must be V0');
-    });
-    const offerFundingInputs: FundingInputV0[] = this.dlcOffer.fundingInputs.map(
-      (input) => input as FundingInputV0,
+    const offerFundingInputs: FundingInput[] = this.dlcOffer.fundingInputs.map(
+      (input) => input as FundingInput,
     );
 
     const offerTotalFunding = offerFundingInputs.reduce((total, input) => {
@@ -77,7 +72,7 @@ export class DlcTxBuilder {
       BigInt(0),
     );
 
-    const fundingInputs: FundingInputV0[] = [
+    const fundingInputs: FundingInput[] = [
       ...offerFundingInputs,
       ...this.dlcAccept.fundingInputs,
     ];

@@ -1,4 +1,4 @@
-import { BufferReader } from '@node-lightning/bufio';
+import { BufferReader, BufferWriter } from '@node-lightning/bufio';
 
 export function deserializeTlv(reader: BufferReader): ITlv {
   const type = reader.readBigSize();
@@ -8,7 +8,15 @@ export function deserializeTlv(reader: BufferReader): ITlv {
   return { type, length, body };
 }
 
-interface ITlv {
+export function serializeTlv(tlv: ITlv, writer: BufferWriter): void {
+  const { type, length, body } = tlv;
+
+  writer.writeBigSize(type);
+  writer.writeBigSize(length);
+  writer.writeBytes(body);
+}
+
+export interface ITlv {
   type: bigint;
   length: bigint;
   body: Buffer;

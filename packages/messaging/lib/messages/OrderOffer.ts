@@ -1,8 +1,12 @@
 import { BufferReader, BufferWriter } from '@node-lightning/bufio';
+import assert from 'assert';
 
-import { IOrderMetadataJSON } from '..';
 import { MessageType } from '../MessageType';
-import { deserializeTlv } from '../serialize/deserializeTlv';
+import {
+  deserializeTlv,
+  ITlv,
+  serializeTlv,
+} from '../serialize/deserializeTlv';
 import { getTlv } from '../serialize/getTlv';
 import {
   validateBigInt,
@@ -11,28 +15,33 @@ import {
 } from '../validation/validate';
 import {
   ContractInfo,
-  IContractInfoV0JSON,
-  IContractInfoV1JSON,
+  IDisjointContractInfoJSON,
+  ISingleContractInfoJSON,
 } from './ContractInfo';
 import { IDlcMessage } from './DlcMessage';
-import { IOrderCsoInfoJSON, OrderCsoInfo } from './OrderCsoInfo';
+import { OrderCsoInfo, OrderCsoInfoV0 } from './OrderCsoInfo';
 import {
-  IOrderIrcInfoJSON,
   OrderIrcInfo,
   OrderIrcInfoV0,
 } from './OrderIrcInfo';
 import { OrderMetadata, OrderMetadataV0 } from './OrderMetadata';
+import { OrderMetadataV0Pre163 } from './pre-163/OrderMetadata';
+import { OrderIrcInfoV0Pre163 } from './pre-163/OrderIrcInfo';
+import { OrderCsoInfoV0Pre163 } from "./pre-163/OrderCsoInfo";
+import { OrderOfferV0Pre163 } from './pre-163/OrderOffer';
 
 const LOCKTIME_THRESHOLD = 500000000;
 export abstract class OrderOffer {
-  public static deserialize(buf: Buffer): OrderOffer {
-    const reader = new BufferReader(buf);
+  public static deserialize(reader: Buffer | BufferReader): OrderOffer {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    const type = Number(reader.readUInt16BE());
+    const tempReader = new BufferReader(reader.peakBytes());
+
+    const type = Number(tempReader.readUInt16BE());
 
     switch (type) {
       case MessageType.OrderOfferV0:
-        return OrderOfferV0.deserialize(buf);
+        return OrderOfferV0.deserialize(reader);
       default:
         throw new Error(`Order offer TLV type must be OrderOfferV0`);
     }
@@ -57,16 +66,20 @@ export class OrderOfferV0 extends OrderOffer implements IDlcMessage {
 
   /**
    * Deserializes an offer_dlc_v0 message
-   * @param buf
+   * @param reader
    */
-  public static deserialize(buf: Buffer): OrderOfferV0 {
+  public static deserialize(reader: Buffer | BufferReader): OrderOfferV0 {
     const instance = new OrderOfferV0();
-    const reader = new BufferReader(buf);
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    reader.readUInt16BE(); // read type
+    const type = reader.readUInt16BE();
+    assert(type === this.type, `Expected OrderOfferV0, got type ${type}`);
+
+    instance.protocolVersion = reader.readUInt32BE();
+    instance.contractFlags = reader.readUInt8();
     instance.chainHash = reader.readBytes(32);
-    instance.contractInfo = ContractInfo.deserialize(getTlv(reader));
-    instance.offerCollateralSatoshis = reader.readUInt64BE();
+    instance.contractInfo = ContractInfo.deserialize(reader);
+    instance.offerCollateral = reader.readUInt64BE();
     instance.feeRatePerVb = reader.readUInt64BE();
     instance.cetLocktime = reader.readUInt32BE();
     instance.refundLocktime = reader.readUInt32BE();
@@ -74,7 +87,9 @@ export class OrderOfferV0 extends OrderOffer implements IDlcMessage {
     while (!reader.eof) {
       const buf = getTlv(reader);
       const tlvReader = new BufferReader(buf);
-      const { type } = deserializeTlv(tlvReader);
+      const { type, length, body } = deserializeTlv(tlvReader);
+
+      instance.tlvs.push({ type, length, body });
 
       switch (Number(type)) {
         case MessageType.OrderMetadataV0:
@@ -94,16 +109,79 @@ export class OrderOfferV0 extends OrderOffer implements IDlcMessage {
     return instance;
   }
 
+  public static fromPre163(
+    offer: OrderOfferV0Pre163,
+    contractFlags: number,
+  ): OrderOfferV0 {
+    const instance = new OrderOfferV0();
+    instance.protocolVersion = 1;
+    instance.contractFlags = contractFlags;
+    instance.chainHash = offer.chainHash;
+    instance.contractInfo = ContractInfo.fromPre163(offer.contractInfo);
+    instance.offerCollateral = offer.offerCollateralSatoshis;
+    instance.feeRatePerVb = offer.feeRatePerVb;
+    instance.cetLocktime = offer.cetLocktime;
+    instance.refundLocktime = offer.refundLocktime;
+    if (offer.metadata) {
+      instance.metadata = OrderMetadataV0.fromPre163(
+        offer.metadata as OrderMetadataV0Pre163,
+      );
+    }
+    if (offer.ircInfo) {
+      instance.ircInfo = OrderIrcInfoV0.fromPre163(
+        offer.ircInfo as OrderIrcInfoV0Pre163,
+      );
+    }
+    if (offer.csoInfo) {
+      instance.csoInfo = OrderCsoInfoV0.fromPre163(
+        offer.csoInfo as OrderCsoInfoV0Pre163,
+      );
+    }
+
+    return instance;
+  }
+
+  public static toPre163(offer: OrderOfferV0): OrderOfferV0Pre163 {
+    const instance = new OrderOfferV0Pre163();
+    instance.chainHash = offer.chainHash;
+    instance.contractInfo = ContractInfo.toPre163(offer.contractInfo);
+    instance.offerCollateralSatoshis = offer.offerCollateral;
+    instance.feeRatePerVb = offer.feeRatePerVb;
+    instance.cetLocktime = offer.cetLocktime;
+    instance.refundLocktime = offer.refundLocktime;
+    if (offer.metadata) {
+      instance.metadata = OrderMetadataV0.toPre163(
+        offer.metadata as OrderMetadataV0Pre163,
+      );
+    }
+    if (offer.ircInfo) {
+      instance.ircInfo = OrderIrcInfoV0.toPre163(
+        offer.ircInfo as OrderIrcInfoV0Pre163,
+      );
+    }
+    if (offer.csoInfo) {
+      instance.csoInfo = OrderCsoInfoV0.toPre163(
+        offer.csoInfo as OrderCsoInfoV0Pre163,
+      );
+    }
+
+    return instance;
+  }
+
   /**
    * The type for order_offer_v0 message. order_offer_v0 = 62770
    */
   public type = OrderOfferV0.type;
 
+  public protocolVersion: number;
+
+  public contractFlags: number;
+
   public chainHash: Buffer;
 
   public contractInfo: ContractInfo;
 
-  public offerCollateralSatoshis: bigint;
+  public offerCollateral: bigint;
 
   public feeRatePerVb: bigint;
 
@@ -117,12 +195,14 @@ export class OrderOfferV0 extends OrderOffer implements IDlcMessage {
 
   public csoInfo?: OrderCsoInfo;
 
+  public tlvs: ITlv[] = [];
+
   public validate(): void {
     validateBuffer(this.chainHash, 'chainHash', OrderOfferV0.name, 32);
     this.contractInfo.validate();
     validateBigInt(
-      this.offerCollateralSatoshis,
-      'offerCollateralSatoshis',
+      this.offerCollateral,
+      'offerCollateral',
       OrderOfferV0.name,
     );
     validateBigInt(this.feeRatePerVb, 'feeRatePerVb', OrderOfferV0.name);
@@ -133,9 +213,9 @@ export class OrderOfferV0 extends OrderOffer implements IDlcMessage {
     // 2. chain_hash must be validated as input by end user
 
     // 3. offer_collateral_satoshis must be greater than or equal to 1000
-    if (this.offerCollateralSatoshis < 1000) {
+    if (this.offerCollateral < 1000) {
       throw new Error(
-        'offer_collateral_satoshis must be greater than or equal to 1000',
+        'offer_collateral must be greater than or equal to 1000',
       );
     }
 
@@ -171,7 +251,7 @@ export class OrderOfferV0 extends OrderOffer implements IDlcMessage {
     this.contractInfo.validate();
 
     // totalCollaterial should be > offerCollaterial (logical validation)
-    if (this.contractInfo.totalCollateral <= this.offerCollateralSatoshis) {
+    if (this.contractInfo.totalCollateral <= this.offerCollateral) {
       throw new Error('totalCollateral should be greater than offerCollateral');
     }
   }
@@ -180,21 +260,19 @@ export class OrderOfferV0 extends OrderOffer implements IDlcMessage {
    * Converts order_offer_v0 to JSON
    */
   public toJSON(): IOrderOfferJSON {
-    const tlvs = [];
-
-    if (this.metadata) tlvs.push(this.metadata.toJSON());
-    if (this.ircInfo) tlvs.push(this.ircInfo.toJSON());
-    if (this.csoInfo) tlvs.push(this.csoInfo.toJSON());
-
     return {
-      type: this.type,
-      chainHash: this.chainHash.toString('hex'),
-      contractInfo: this.contractInfo.toJSON(),
-      offerCollateralSatoshis: Number(this.offerCollateralSatoshis),
-      feeRatePerVb: Number(this.feeRatePerVb),
-      cetLocktime: this.cetLocktime,
-      refundLocktime: this.refundLocktime,
-      tlvs,
+      message: {
+        protocolVersion: this.protocolVersion,
+        contractFlags: this.contractFlags,
+        chainHash: this.chainHash.toString('hex'),
+        contractInfo: this.contractInfo.toJSON(),
+        offerCollateral: Number(this.offerCollateral),
+        feeRatePerVb: Number(this.feeRatePerVb),
+        cetLocktime: this.cetLocktime,
+        refundLocktime: this.refundLocktime,
+        tlvs: this.tlvs,
+      },
+      serialized: this.serialize().toString('hex'),
     };
   }
 
@@ -204,28 +282,39 @@ export class OrderOfferV0 extends OrderOffer implements IDlcMessage {
   public serialize(): Buffer {
     const writer = new BufferWriter();
     writer.writeUInt16BE(this.type);
+    writer.writeUInt32BE(this.protocolVersion);
+    writer.writeUInt8(this.contractFlags);
     writer.writeBytes(this.chainHash);
     writer.writeBytes(this.contractInfo.serialize());
-    writer.writeUInt64BE(this.offerCollateralSatoshis);
+    writer.writeUInt64BE(this.offerCollateral);
     writer.writeUInt64BE(this.feeRatePerVb);
     writer.writeUInt32BE(this.cetLocktime);
     writer.writeUInt32BE(this.refundLocktime);
 
-    if (this.metadata) writer.writeBytes(this.metadata.serialize());
-    if (this.ircInfo) writer.writeBytes(this.ircInfo.serialize());
-    if (this.csoInfo) writer.writeBytes(this.csoInfo.serialize());
+    for (const tlv of this.tlvs) {
+      serializeTlv(tlv, writer);
+    }
 
     return writer.toBuffer();
   }
 }
+export interface ITlvJSON {
+  type: number;
+  length: number;
+  body: string;
+}
 
 export interface IOrderOfferJSON {
-  type: number;
-  chainHash: string;
-  contractInfo: IContractInfoV0JSON | IContractInfoV1JSON;
-  offerCollateralSatoshis: number;
-  feeRatePerVb: number;
-  cetLocktime: number;
-  refundLocktime: number;
-  tlvs: (IOrderMetadataJSON | IOrderIrcInfoJSON | IOrderCsoInfoJSON)[];
+  message: {
+    protocolVersion: number;
+    contractFlags: number;
+    chainHash: string;
+    contractInfo: ISingleContractInfoJSON | IDisjointContractInfoJSON;
+    offerCollateral: number;
+    feeRatePerVb: number;
+    cetLocktime: number;
+    refundLocktime: number;
+    tlvs: ITlv[];
+  };
+  serialized: string;
 }

@@ -1,17 +1,21 @@
 import { BufferReader, BufferWriter } from '@node-lightning/bufio';
+import assert from 'assert';
 
 import { MessageType } from '../MessageType';
 import { IDlcMessage } from './DlcMessage';
+import { OrderMetadataV0Pre163 } from './pre-163/OrderMetadata';
 
 export abstract class OrderMetadata {
-  public static deserialize(buf: Buffer): OrderMetadata {
-    const reader = new BufferReader(buf);
+  public static deserialize(reader: Buffer | BufferReader): OrderMetadata {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    const type = Number(reader.readBigSize());
+    const tempReader = new BufferReader(reader.peakBytes());
+
+    const type = Number(tempReader.readBigSize());
 
     switch (type) {
       case MessageType.OrderMetadataV0:
-        return OrderMetadataV0.deserialize(buf);
+        return OrderMetadataV0.deserialize(reader);
       default:
         throw new Error(`Order metadata TLV type must be OrderMetadataV0`);
     }
@@ -34,14 +38,16 @@ export class OrderMetadataV0 extends OrderMetadata implements IDlcMessage {
 
   /**
    * Deserializes an offer_dlc_v0 message
-   * @param buf
+   * @param reader
    */
-  public static deserialize(buf: Buffer): OrderMetadataV0 {
+  public static deserialize(reader: Buffer | BufferReader): OrderMetadataV0 {
     const instance = new OrderMetadataV0();
-    const reader = new BufferReader(buf);
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    reader.readBigSize(); // read type
-    instance.length = reader.readBigSize();
+    const type = Number(reader.readBigSize());
+    assert(type === this.type, `Expected OrderMetadataV0, got type ${type}`);
+
+    reader.readBigSize(); // read off length
     const offerIdLength = reader.readBigSize();
     const offerIdBuf = reader.readBytes(Number(offerIdLength));
     instance.offerId = offerIdBuf.toString();
@@ -54,12 +60,30 @@ export class OrderMetadataV0 extends OrderMetadata implements IDlcMessage {
     return instance;
   }
 
+  public static fromPre163(metadata: OrderMetadataV0Pre163): OrderMetadataV0 {
+    const instance = new OrderMetadataV0();
+
+    instance.offerId = metadata.offerId;
+    instance.createdAt = metadata.createdAt;
+    instance.goodTill = metadata.goodTill;
+
+    return instance;
+  }
+
+  public static toPre163(metadata: OrderMetadataV0): OrderMetadataV0Pre163 {
+    const instance = new OrderMetadataV0Pre163();
+
+    instance.offerId = metadata.offerId;
+    instance.createdAt = metadata.createdAt;
+    instance.goodTill = metadata.goodTill;
+
+    return instance;
+  }
+
   /**
    * The type for order_metadata_v0 message. order_metadata_v0 = 62774
    */
   public type = OrderMetadataV0.type;
-
-  public length: bigint;
 
   /**
    * offerId is a unique identifier for an offer
@@ -84,7 +108,6 @@ export class OrderMetadataV0 extends OrderMetadata implements IDlcMessage {
    */
   public toJSON(): IOrderMetadataJSON {
     return {
-      type: this.type,
       offerId: this.offerId,
       createdAt: this.createdAt,
       goodTill: this.goodTill,
@@ -99,12 +122,14 @@ export class OrderMetadataV0 extends OrderMetadata implements IDlcMessage {
     writer.writeBigSize(this.type);
 
     const dataWriter = new BufferWriter();
+
     dataWriter.writeBigSize(this.offerId.length);
     dataWriter.writeBytes(Buffer.from(this.offerId));
     dataWriter.writeUInt32BE(this.createdAt);
     dataWriter.writeUInt32BE(this.goodTill);
 
     writer.writeBigSize(dataWriter.size);
+
     writer.writeBytes(dataWriter.toBuffer());
 
     return writer.toBuffer();
@@ -112,7 +137,6 @@ export class OrderMetadataV0 extends OrderMetadata implements IDlcMessage {
 }
 
 export interface IOrderMetadataJSON {
-  type: number;
   offerId: string;
   createdAt: number;
   goodTill: number;

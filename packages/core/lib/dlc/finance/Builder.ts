@@ -1,15 +1,15 @@
 import { Value } from '@node-dlc/bitcoin';
 import {
-  ContractDescriptorV1,
-  ContractInfoV0,
-  DigitDecompositionEventDescriptorV0,
+  NumericContractDescriptor,
+  SingleContractInfo,
+  DigitDecompositionEventDescriptorV0Pre167,
   MessageType,
-  OracleAnnouncementV0,
-  OracleInfoV0,
+  OracleAnnouncementV0Pre167,
+  SingleOracleInfo,
   OrderCsoInfoV0,
   OrderOfferV0,
-  PayoutFunctionV0,
-  RoundingIntervalsV0,
+  PayoutFunction,
+  RoundingIntervals,
 } from '@node-dlc/messaging';
 import {
   BitcoinNetwork,
@@ -76,8 +76,8 @@ export const computeRoundingModulus = (
  * @returns {DigitDecompositionEventDescriptorV0} event descriptor
  */
 export const getDigitDecompositionEventDescriptor = (
-  announcement: OracleAnnouncementV0,
-): DigitDecompositionEventDescriptorV0 => {
+  announcement: OracleAnnouncementV0Pre167,
+): DigitDecompositionEventDescriptorV0Pre167 => {
   if (
     announcement.oracleEvent.eventDescriptor.type !==
     MessageType.DigitDecompositionEventDescriptorV0
@@ -85,43 +85,43 @@ export const getDigitDecompositionEventDescriptor = (
     throw Error('Only DigitDecompositionEventDescriptorV0 currently supported');
 
   const eventDescriptor = announcement.oracleEvent
-    .eventDescriptor as DigitDecompositionEventDescriptorV0;
+    .eventDescriptor as DigitDecompositionEventDescriptorV0Pre167;
 
   return eventDescriptor;
 };
 
 /**
- * Build an orderoffer for ContractDescriptorV1
+ * Build an orderoffer for NumericContractDescriptor
  *
  * @param {OracleAnnouncementV0} announcement oracle announcement
  * @param {bigint} totalCollateral total collateral in satoshis
  * @param {bigint} offerCollateral offer collateral in satoshis
- * @param {PayoutFunctionV0} payoutFunction
- * @param {RoundingIntervalsV0} roundingIntervals
+ * @param {PayoutFunction} payoutFunction
+ * @param {RoundingIntervals} roundingIntervals
  * @param {bigint} feePerByte sats/vbyte
  * @param {NetworkName} network
  * @returns {OrderOfferV0} Returns order offer
  */
 export const buildOrderOffer = (
-  announcement: OracleAnnouncementV0,
+  announcement: OracleAnnouncementV0Pre167,
   totalCollateral: bigint,
   offerCollateral: bigint,
-  payoutFunction: PayoutFunctionV0,
-  roundingIntervals: RoundingIntervalsV0,
+  payoutFunction: PayoutFunction,
+  roundingIntervals: RoundingIntervals,
   feePerByte: bigint,
   network: string,
 ): OrderOfferV0 => {
   const eventDescriptor = getDigitDecompositionEventDescriptor(announcement);
 
-  const contractDescriptor = new ContractDescriptorV1();
+  const contractDescriptor = new NumericContractDescriptor();
   contractDescriptor.numDigits = eventDescriptor.nbDigits;
   contractDescriptor.payoutFunction = payoutFunction;
   contractDescriptor.roundingIntervals = roundingIntervals;
 
-  const oracleInfo = new OracleInfoV0();
+  const oracleInfo = new SingleOracleInfo();
   oracleInfo.announcement = announcement;
 
-  const contractInfo = new ContractInfoV0();
+  const contractInfo = new SingleContractInfo();
   contractInfo.totalCollateral = totalCollateral;
   contractInfo.contractDescriptor = contractDescriptor;
   contractInfo.oracleInfo = oracleInfo;
@@ -130,7 +130,7 @@ export const buildOrderOffer = (
 
   orderOffer.chainHash = chainHashFromNetwork(BitcoinNetworks[network]);
   orderOffer.contractInfo = contractInfo;
-  orderOffer.offerCollateralSatoshis = offerCollateral;
+  orderOffer.offerCollateral = offerCollateral;
   orderOffer.feeRatePerVb = feePerByte;
   orderOffer.cetLocktime = Math.floor(new Date().getTime() / 1000); // set to current time
   orderOffer.refundLocktime =
@@ -154,7 +154,7 @@ export const buildOrderOffer = (
  * @returns {OrderOfferV0} Returns order offer
  */
 export const buildOptionOrderOffer = (
-  announcement: OracleAnnouncementV0,
+  announcement: OracleAnnouncementV0Pre167,
   contractSize: number,
   strikePrice: number,
   premium: number,
@@ -168,10 +168,10 @@ export const buildOptionOrderOffer = (
 
   let totalCollateral: bigint;
   let payoutFunctionInfo: {
-    payoutFunction: PayoutFunctionV0;
+    payoutFunction: PayoutFunction;
     totalCollateral?: bigint;
   };
-  const roundingIntervals = new RoundingIntervalsV0();
+  const roundingIntervals = new RoundingIntervals();
   const roundingMod = computeRoundingModulus(rounding, contractSize);
 
   if (type === 'call') {
@@ -240,7 +240,7 @@ export const buildOptionOrderOffer = (
  * @returns {OrderOfferV0} Returns order offer
  */
 export const buildCoveredCallOrderOffer = (
-  announcement: OracleAnnouncementV0,
+  announcement: OracleAnnouncementV0Pre167,
   contractSize: number,
   strikePrice: number,
   premium: number,
@@ -274,7 +274,7 @@ export const buildCoveredCallOrderOffer = (
  * @returns {OrderOfferV0} Returns order offer
  */
 export const buildShortPutOrderOffer = (
-  announcement: OracleAnnouncementV0,
+  announcement: OracleAnnouncementV0Pre167,
   contractSize: number,
   strikePrice: number,
   totalCollateral: number,
@@ -313,14 +313,14 @@ export const buildShortPutOrderOffer = (
  * @returns {OrderOfferV0}
  */
 export const buildLinearOrderOffer = (
-  announcement: OracleAnnouncementV0,
+  announcement: OracleAnnouncementV0Pre167,
   offerCollateral: Value,
   minPayout: Value,
   maxPayout: Value,
   startOutcome: bigint,
   endOutcome: bigint,
   feePerByte: bigint,
-  roundingIntervals: RoundingIntervalsV0,
+  roundingIntervals: RoundingIntervals,
   network: BitcoinNetwork,
   shiftForFees: DlcParty = 'neither',
   fees: Value = Value.fromSats(0),
@@ -378,12 +378,12 @@ export const buildLinearOrderOffer = (
  * @returns {OrderOfferV0}
  */
 export const buildCustomStrategyOrderOffer = (
-  announcement: OracleAnnouncementV0,
+  announcement: OracleAnnouncementV0Pre167,
   contractSize: Value,
   maxLoss: Value,
   maxGain: Value,
   feePerByte: bigint,
-  roundingIntervals: RoundingIntervalsV0,
+  roundingIntervals: RoundingIntervals,
   network: BitcoinNetwork,
   shiftForFees: DlcParty = 'neither',
   fees: Value = Value.fromSats(0),
@@ -461,8 +461,8 @@ interface IInterval {
 export const buildRoundingIntervalsFromIntervals = (
   contractSize: Value,
   intervals: IInterval[],
-): RoundingIntervalsV0 => {
-  const roundingIntervals = new RoundingIntervalsV0();
+): RoundingIntervals => {
+  const roundingIntervals = new RoundingIntervals();
 
   roundingIntervals.intervals = intervals.map((interval) => {
     const roundingMod = computeRoundingModulus(interval.rounding, contractSize);

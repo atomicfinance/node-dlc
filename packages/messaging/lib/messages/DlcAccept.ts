@@ -1,34 +1,45 @@
 import { Script } from '@node-lightning/bitcoin';
 import { BufferReader, BufferWriter } from '@node-lightning/bufio';
-import { hash160 } from '@node-lightning/crypto';
+import { hash160, sigToDER } from '@node-lightning/crypto';
+import assert from 'assert';
 import { BitcoinNetwork } from 'bitcoin-networks';
 import { address } from 'bitcoinjs-lib';
 import secp256k1 from 'secp256k1';
 
 import { MessageType } from '../MessageType';
-import { getTlv, skipTlv } from '../serialize/getTlv';
 import {
-  CetAdaptorSignaturesV0,
-  ICetAdaptorSignaturesV0JSON,
-} from './CetAdaptorSignaturesV0';
+  deserializeTlv,
+  ITlv,
+  serializeTlv,
+} from '../serialize/deserializeTlv';
+import { getTlv } from '../serialize/getTlv';
+import {
+  CetAdaptorSignatures,
+  ICetAdaptorSignaturesJSON,
+} from './CetAdaptorSignatures';
 import { IDlcMessage } from './DlcMessage';
-import { FundingInputV0, IFundingInputV0JSON } from './FundingInput';
+import { FundingInput, IFundingInputJSON } from './FundingInput';
 import {
-  INegotiationFieldsV0JSON,
-  INegotiationFieldsV1JSON,
-  INegotiationFieldsV2JSON,
+  IDisjointNegotiationFieldsJSON,
+  ISingleNegotiationFieldsJSON,
   NegotiationFields,
 } from './NegotiationFields';
+import { DlcAcceptV0Pre163 } from './pre-163/DlcAccept';
 
 export abstract class DlcAccept implements IDlcMessage {
-  public static deserialize(buf: Buffer, parseCets = true): DlcAcceptV0 {
-    const reader = new BufferReader(buf);
+  public static deserialize(
+    reader: Buffer | BufferReader,
+    parseCets = true,
+  ): DlcAcceptV0 {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    const type = Number(reader.readUInt16BE());
+    const tempReader = new BufferReader(reader.peakBytes());
+
+    const type = Number(tempReader.readUInt16BE());
 
     switch (type) {
       case MessageType.DlcAcceptV0:
-        return DlcAcceptV0.deserialize(buf, parseCets);
+        return DlcAcceptV0.deserialize(reader, parseCets);
       default:
         throw new Error(`Dlc Accept message type must be DlcAcceptV0`);
     }
@@ -54,36 +65,102 @@ export class DlcAcceptV0 extends DlcAccept implements IDlcMessage {
 
   /**
    * Deserializes an oracle_info message
-   * @param buf
+   * @param reader
    */
-  public static deserialize(buf: Buffer, parseCets = true): DlcAcceptV0 {
+  public static deserialize(
+    reader: Buffer | BufferReader,
+    parseCets = true,
+  ): DlcAcceptV0 {
     const instance = new DlcAcceptV0();
-    const reader = new BufferReader(buf);
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    reader.readUInt16BE(); // read type
-    instance.tempContractId = reader.readBytes(32);
-    instance.acceptCollateralSatoshis = reader.readUInt64BE();
+    const type = reader.readUInt16BE();
+    assert(type === this.type, `Expected DlcAcceptV0, got type ${type}`);
+
+    instance.protocolVersion = reader.readUInt32BE();
+    instance.temporaryContractId = reader.readBytes(32);
+    instance.acceptCollateral = reader.readUInt64BE();
     instance.fundingPubKey = reader.readBytes(33);
     const payoutSPKLen = reader.readUInt16BE();
     instance.payoutSPK = reader.readBytes(payoutSPKLen);
     instance.payoutSerialId = reader.readUInt64BE();
-    const fundingInputsLen = reader.readUInt16BE();
+    const fundingInputsLen = reader.readBigSize();
     for (let i = 0; i < fundingInputsLen; i++) {
-      instance.fundingInputs.push(FundingInputV0.deserialize(getTlv(reader)));
+      instance.fundingInputs.push(FundingInput.deserialize(reader));
     }
     const changeSPKLen = reader.readUInt16BE();
     instance.changeSPK = reader.readBytes(changeSPKLen);
     instance.changeSerialId = reader.readUInt64BE();
-    if (parseCets) {
-      instance.cetSignatures = CetAdaptorSignaturesV0.deserialize(
-        getTlv(reader),
-      );
-    } else {
-      skipTlv(reader);
-      instance.cetSignatures = new CetAdaptorSignaturesV0();
-    }
+    instance.cetSignatures = CetAdaptorSignatures.deserialize(
+      reader,
+      parseCets,
+    );
     instance.refundSignature = reader.readBytes(64);
-    instance.negotiationFields = NegotiationFields.deserialize(getTlv(reader));
+    const hasNegotiationFields = reader.readUInt8() === 1;
+    if (hasNegotiationFields) {
+      instance.negotiationFields = NegotiationFields.deserialize(reader);
+    }
+
+    while (!reader.eof) {
+      const buf = getTlv(reader);
+      const tlvReader = new BufferReader(buf);
+      const { type, length, body } = deserializeTlv(tlvReader);
+
+      instance.tlvs.push({ type, length, body });
+    }
+
+    return instance;
+  }
+
+  public static fromPre163(accept: DlcAcceptV0Pre163): DlcAcceptV0 {
+    const instance = new DlcAcceptV0();
+
+    instance.protocolVersion = 1;
+    instance.temporaryContractId = accept.tempContractId;
+    instance.acceptCollateral = accept.acceptCollateralSatoshis;
+    instance.fundingPubKey = accept.fundingPubKey;
+    instance.payoutSPK = accept.payoutSPK;
+    instance.payoutSerialId = accept.payoutSerialId;
+    instance.fundingInputs = accept.fundingInputs.map((input) =>
+      FundingInput.fromPre163(input),
+    );
+    instance.changeSPK = accept.changeSPK;
+    instance.changeSerialId = accept.changeSerialId;
+    instance.cetSignatures = CetAdaptorSignatures.fromPre163(
+      accept.cetSignatures,
+    );
+    instance.refundSignature = accept.refundSignature;
+    if (accept.negotiationFields) {
+      instance.negotiationFields = NegotiationFields.fromPre163(
+        accept.negotiationFields,
+      );
+    }
+
+    return instance;
+  }
+
+  public static toPre163(accept: DlcAcceptV0): DlcAcceptV0Pre163 {
+    const instance = new DlcAcceptV0Pre163();
+
+    instance.tempContractId = accept.temporaryContractId;
+    instance.acceptCollateralSatoshis = accept.acceptCollateral;
+    instance.fundingPubKey = accept.fundingPubKey;
+    instance.payoutSPK = accept.payoutSPK;
+    instance.payoutSerialId = accept.payoutSerialId;
+    instance.fundingInputs = accept.fundingInputs.map((input) =>
+      FundingInput.toPre163(input),
+    );
+    instance.changeSPK = accept.changeSPK;
+    instance.changeSerialId = accept.changeSerialId;
+    instance.cetSignatures = CetAdaptorSignatures.toPre163(
+      accept.cetSignatures,
+    );
+    instance.refundSignature = accept.refundSignature;
+    if (accept.negotiationFields) {
+      instance.negotiationFields = NegotiationFields.toPre163(
+        accept.negotiationFields,
+      );
+    }
 
     return instance;
   }
@@ -93,9 +170,11 @@ export class DlcAcceptV0 extends DlcAccept implements IDlcMessage {
    */
   public type = DlcAcceptV0.type;
 
-  public tempContractId: Buffer;
+  public protocolVersion: number;
 
-  public acceptCollateralSatoshis: bigint;
+  public temporaryContractId: Buffer;
+
+  public acceptCollateral: bigint;
 
   public fundingPubKey: Buffer;
 
@@ -103,17 +182,19 @@ export class DlcAcceptV0 extends DlcAccept implements IDlcMessage {
 
   public payoutSerialId: bigint;
 
-  public fundingInputs: FundingInputV0[] = [];
+  public fundingInputs: FundingInput[] = [];
 
   public changeSPK: Buffer;
 
   public changeSerialId: bigint;
 
-  public cetSignatures: CetAdaptorSignaturesV0;
+  public cetSignatures: CetAdaptorSignatures;
 
   public refundSignature: Buffer;
 
-  public negotiationFields: NegotiationFields;
+  public negotiationFields: null | NegotiationFields = null;
+
+  public tlvs: ITlv[] = [];
 
   /**
    * Get funding, change and payout address from DlcOffer
@@ -170,7 +251,7 @@ export class DlcAcceptV0 extends DlcAccept implements IDlcMessage {
     // 4. inputSerialId must be unique for each input
 
     const inputSerialIds = this.fundingInputs.map(
-      (input: FundingInputV0) => input.inputSerialId,
+      (input: FundingInput) => input.inputSerialId,
     );
 
     if (new Set(inputSerialIds).size !== inputSerialIds.length) {
@@ -178,17 +259,15 @@ export class DlcAcceptV0 extends DlcAccept implements IDlcMessage {
     }
 
     // 5. Ensure funding inputs are segwit
-    this.fundingInputs.forEach((input: FundingInputV0) => input.validate());
+    this.fundingInputs.forEach((input: FundingInput) => input.validate());
 
     // validate funding amount
     const fundingAmount = this.fundingInputs.reduce((acc, fundingInput) => {
-      const input = fundingInput as FundingInputV0;
+      const input = fundingInput as FundingInput;
       return acc + input.prevTx.outputs[input.prevTxVout].value.sats;
     }, BigInt(0));
-    if (this.acceptCollateralSatoshis >= fundingAmount) {
-      throw new Error(
-        'fundingAmount must be greater than acceptCollateralSatoshis',
-      );
+    if (this.acceptCollateral >= fundingAmount) {
+      throw new Error('fundingAmount must be greater than acceptCollateral');
     }
   }
 
@@ -197,18 +276,23 @@ export class DlcAcceptV0 extends DlcAccept implements IDlcMessage {
    */
   public toJSON(): IDlcAcceptV0JSON {
     return {
-      type: this.type,
-      tempContractId: this.tempContractId.toString('hex'),
-      acceptCollateralSatoshis: Number(this.acceptCollateralSatoshis),
-      fundingPubKey: this.fundingPubKey.toString('hex'),
-      payoutSPK: this.payoutSPK.toString('hex'),
-      payoutSerialId: Number(this.payoutSerialId),
-      fundingInputs: this.fundingInputs.map((input) => input.toJSON()),
-      changeSPK: this.changeSPK.toString('hex'),
-      changeSerialId: Number(this.changeSerialId),
-      cetSignatures: this.cetSignatures.toJSON(),
-      refundSignature: this.refundSignature.toString('hex'),
-      negotiationFields: this.negotiationFields.toJSON(),
+      message: {
+        protocolVersion: this.protocolVersion,
+        temporaryContractId: this.temporaryContractId.toString('hex'),
+        acceptCollateral: Number(this.acceptCollateral),
+        fundingPubkey: this.fundingPubKey.toString('hex'),
+        payoutSpk: this.payoutSPK.toString('hex'),
+        payoutSerialId: Number(this.payoutSerialId),
+        fundingInputs: this.fundingInputs.map((input) => input.toJSON()),
+        changeSpk: this.changeSPK.toString('hex'),
+        changeSerialId: Number(this.changeSerialId),
+        cetAdaptorSignatures: this.cetSignatures.toJSON(),
+        refundSignature: sigToDER(this.refundSignature).toString('hex'),
+        negotiationFields: this.negotiationFields
+          ? this.negotiationFields.toJSON()
+          : null,
+      },
+      serialized: this.serialize().toString('hex'),
     };
   }
 
@@ -218,13 +302,14 @@ export class DlcAcceptV0 extends DlcAccept implements IDlcMessage {
   public serialize(): Buffer {
     const writer = new BufferWriter();
     writer.writeUInt16BE(this.type);
-    writer.writeBytes(this.tempContractId);
-    writer.writeUInt64BE(this.acceptCollateralSatoshis);
+    writer.writeUInt32BE(this.protocolVersion);
+    writer.writeBytes(this.temporaryContractId);
+    writer.writeUInt64BE(this.acceptCollateral);
     writer.writeBytes(this.fundingPubKey);
     writer.writeUInt16BE(this.payoutSPK.length);
     writer.writeBytes(this.payoutSPK);
     writer.writeUInt64BE(this.payoutSerialId);
-    writer.writeUInt16BE(this.fundingInputs.length);
+    writer.writeBigSize(this.fundingInputs.length);
 
     for (const fundingInput of this.fundingInputs) {
       writer.writeBytes(fundingInput.serialize());
@@ -235,15 +320,22 @@ export class DlcAcceptV0 extends DlcAccept implements IDlcMessage {
     writer.writeUInt64BE(this.changeSerialId);
     writer.writeBytes(this.cetSignatures.serialize());
     writer.writeBytes(this.refundSignature);
-    writer.writeBytes(this.negotiationFields.serialize());
+    writer.writeUInt8(this.negotiationFields ? 1 : 0);
+    if (this.negotiationFields) {
+      writer.writeBytes(this.negotiationFields.serialize());
+    }
+
+    for (const tlv of this.tlvs) {
+      serializeTlv(tlv, writer);
+    }
 
     return writer.toBuffer();
   }
 
   public withoutSigs(): DlcAcceptWithoutSigs {
     return new DlcAcceptWithoutSigs(
-      this.tempContractId,
-      this.acceptCollateralSatoshis,
+      this.temporaryContractId,
+      this.acceptCollateral,
       this.fundingPubKey,
       this.payoutSPK,
       this.payoutSerialId,
@@ -257,12 +349,12 @@ export class DlcAcceptV0 extends DlcAccept implements IDlcMessage {
 
 export class DlcAcceptWithoutSigs {
   constructor(
-    readonly tempContractId: Buffer,
-    readonly acceptCollateralSatoshis: bigint,
+    readonly temporaryContractId: Buffer,
+    readonly acceptCollateral: bigint,
     readonly fundingPubKey: Buffer,
     readonly payoutSPK: Buffer,
     readonly payoutSerialId: bigint,
-    readonly fundingInputs: FundingInputV0[],
+    readonly fundingInputs: FundingInput[],
     readonly changeSPK: Buffer,
     readonly changeSerialId: bigint,
     readonly negotiationFields: NegotiationFields,
@@ -270,21 +362,23 @@ export class DlcAcceptWithoutSigs {
 }
 
 export interface IDlcAcceptV0JSON {
-  type: number;
-  tempContractId: string;
-  acceptCollateralSatoshis: number;
-  fundingPubKey: string;
-  payoutSPK: string;
-  payoutSerialId: number;
-  fundingInputs: IFundingInputV0JSON[];
-  changeSPK: string;
-  changeSerialId: number;
-  cetSignatures: ICetAdaptorSignaturesV0JSON;
-  refundSignature: string;
-  negotiationFields:
-    | INegotiationFieldsV0JSON
-    | INegotiationFieldsV1JSON
-    | INegotiationFieldsV2JSON;
+  message: {
+    protocolVersion: number;
+    temporaryContractId: string;
+    acceptCollateral: number;
+    fundingPubkey: string;
+    payoutSpk: string;
+    payoutSerialId: number;
+    fundingInputs: IFundingInputJSON[];
+    changeSpk: string;
+    changeSerialId: number;
+    cetAdaptorSignatures: ICetAdaptorSignaturesJSON;
+    refundSignature: string;
+    negotiationFields:
+      | ISingleNegotiationFieldsJSON
+      | IDisjointNegotiationFieldsJSON;
+  };
+  serialized: string;
 }
 
 export interface IDlcAcceptV0Addresses {

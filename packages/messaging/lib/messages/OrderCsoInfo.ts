@@ -2,6 +2,8 @@ import { BufferReader, BufferWriter } from '@node-lightning/bufio';
 
 import { MessageType } from '../MessageType';
 import { IDlcMessage } from './DlcMessage';
+import { OrderMetadataV0Pre163 } from "./pre-163/OrderMetadata";
+import { OrderCsoInfoV0Pre163 } from "./pre-163/OrderCsoInfo";
 
 export type DlcParty = 'offeror' | 'acceptor' | 'neither';
 
@@ -55,6 +57,26 @@ export class OrderCsoInfoV0 extends OrderCsoInfo implements IDlcMessage {
     }
 
     instance.fees = reader.readUInt64BE();
+
+    return instance;
+  }
+
+  public static fromPre163(csoInfo: OrderCsoInfoV0Pre163): OrderCsoInfoV0 {
+    const instance = new OrderCsoInfoV0();
+
+    instance.length = csoInfo.length;
+    instance.shiftForFees = csoInfo.shiftForFees;
+    instance.fees = csoInfo.fees;
+
+    return instance;
+  }
+
+  public static toPre163(csoInfo: OrderCsoInfoV0): OrderCsoInfoV0Pre163 {
+    const instance = new OrderCsoInfoV0Pre163();
+
+    instance.length = csoInfo.length;
+    instance.shiftForFees = csoInfo.shiftForFees;
+    instance.fees = csoInfo.fees;
 
     return instance;
   }

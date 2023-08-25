@@ -2,7 +2,7 @@
 
 import {
   DlcIdsV0,
-  OracleEventContainerV0,
+  OracleEventContainerV0Pre167,
   OracleIdentifierV0,
 } from '@node-dlc/messaging';
 import { sha256 } from '@node-lightning/crypto';
@@ -52,7 +52,7 @@ describe('RocksdbOracleStore', () => {
       'hex'
   ); // prettier-ignore
 
-  const oracleEventContainer = OracleEventContainerV0.deserialize(
+  const oracleEventContainer = OracleEventContainerV0Pre167.deserialize(
     oracleEventContainerHex,
   );
 

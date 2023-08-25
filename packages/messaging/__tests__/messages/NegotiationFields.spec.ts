@@ -1,25 +1,39 @@
 import { expect } from 'chai';
 
 import {
+  DisjointNegotiationFields,
   NegotiationFields,
-  NegotiationFieldsV0,
-  NegotiationFieldsV1,
-  NegotiationFieldsV2,
+  SingleNegotiationFields,
 } from '../../lib/messages/NegotiationFields';
-import { RoundingIntervalsV0 } from '../../lib/messages/RoundingIntervalsV0';
-import { MessageType } from '../../lib/MessageType';
+import {
+  NegotiationFieldsV1Pre163,
+  NegotiationFieldsV2Pre163,
+} from '../../lib/messages/pre-163/NegotiationFields';
+import { RoundingIntervalsV0Pre163 } from '../../lib/messages/pre-163/RoundingIntervals';
+import { RoundingIntervals } from '../../lib/messages/RoundingIntervals';
 
 describe('NegotiationFields', () => {
-  describe('NegotiationFieldsV0', () => {
+  describe('SingleNegotiationFields', () => {
+    const instance = new SingleNegotiationFields();
+
+    beforeEach(() => {
+      instance.roundingIntervals = RoundingIntervals.deserialize(
+        Buffer.from(
+          '01' + // num_rounding_intervals
+            '0000000000001388' + // begin_interval
+            '0000000000002710', // rounding_mod
+          'hex',
+        ),
+      );
+    });
+
     describe('serialize', () => {
       it('serializes', () => {
-        const instance = new NegotiationFieldsV0();
-
-        instance.length = BigInt(0);
-
         expect(instance.serialize().toString('hex')).to.equal(
-          'fdd826' + // type negotiation_fields_v0
-            '00', // length
+          '00' + // type single_negotiation_fields
+            '01' + // num_rounding_intervals
+            '0000000000001388' + // begin_interval
+            '0000000000002710', // rounding_mod
         );
       });
     });
@@ -27,47 +41,91 @@ describe('NegotiationFields', () => {
     describe('deserialize', () => {
       it('deserializes', () => {
         const buf = Buffer.from(
-          "fdd826" + // type negotiation_fields_v0
-          "00" // length
+          "00" + // type single_negotiation_fields
+          "01" + // num_rounding_intervals
+          "0000000000001388" + // begin_interval
+          "0000000000002710" // rounding_mod
           , "hex"
         ); // prettier-ignore
-
         const unknownInstance = NegotiationFields.deserialize(buf);
 
-        if (unknownInstance.type === MessageType.NegotiationFieldsV0) {
-          const instance = unknownInstance as NegotiationFieldsV0;
+        expect(unknownInstance).to.be.instanceof(SingleNegotiationFields);
+        expect(
+          (unknownInstance as SingleNegotiationFields).roundingIntervals
+            .serialize()
+            .toString('hex'),
+        ).to.equal(
+          '01' + // num_rounding_intervals
+            '0000000000001388' + // begin_interval
+            '0000000000002710', // rounding_mod
+        );
+      });
+    });
 
-          expect(Number(instance.length)).to.equal(0);
-        }
+    describe('toPre163', () => {
+      it('returns pre-163 instance', () => {
+        const pre163 = NegotiationFields.toPre163(instance);
+        expect(pre163).to.be.instanceof(NegotiationFieldsV1Pre163);
+        expect(
+          (pre163 as NegotiationFieldsV1Pre163).roundingIntervals,
+        ).to.be.instanceof(RoundingIntervalsV0Pre163);
+        expect(
+          (pre163 as NegotiationFieldsV1Pre163).roundingIntervals.intervals,
+        ).to.deep.equal(instance.roundingIntervals.intervals);
+      });
+    });
+
+    describe('fromPre163', () => {
+      const intervals = [
+        { beginInterval: 1n, roundingMod: 2n },
+        { beginInterval: 3n, roundingMod: 4n },
+      ];
+      const roundingIntervalsPre163 = new RoundingIntervalsV0Pre163();
+      const pre163 = new NegotiationFieldsV1Pre163();
+
+      before(() => {
+        roundingIntervalsPre163.intervals = intervals;
+        pre163.roundingIntervals = roundingIntervalsPre163;
+      });
+
+      it('returns post-163 instance', () => {
+        const post163 = NegotiationFields.fromPre163(pre163);
+        expect(post163).to.be.instanceof(SingleNegotiationFields);
+        expect(
+          (post163 as SingleNegotiationFields).roundingIntervals,
+        ).to.be.instanceof(RoundingIntervals);
+        expect(
+          (post163 as SingleNegotiationFields).roundingIntervals.intervals,
+        ).to.deep.equal(pre163.roundingIntervals.intervals);
       });
     });
   });
 
-  describe('NegotiationFieldsV1', () => {
-    describe('serialize', () => {
-      it('serializes', () => {
-        const instance = new NegotiationFieldsV1();
+  describe('DisjointNegotiationFields', () => {
+    const instance = new DisjointNegotiationFields();
 
-        instance.length = BigInt(12);
-        instance.roundingIntervals = RoundingIntervalsV0.deserialize(
+    beforeEach(() => {
+      instance.negotiationFieldsList = [
+        NegotiationFields.deserialize(
           Buffer.from(
-            'fda724' + // type rounding_intervals_v0
-              '08' + // length
-              '0001' + // num_rounding_intervals
-              'fd1388' + // begin_interval
-              'fd2710', // rounding_mod
+            '00' + // type single_negotiation_fields
+              '01' + // num_rounding_intervals
+              '0000000000001388' + // begin_interval
+              '0000000000002710', // rounding_mod
             'hex',
           ),
-        );
-
+        ),
+      ];
+    });
+    describe('serialize', () => {
+      it('serializes', () => {
         expect(instance.serialize().toString('hex')).to.equal(
-          'fdd828' + // type negotiation_fields_v1
-            '0c' + // length
-            'fda724' + // type rounding_intervals_v0
-            '08' + // length
-            '0001' + // num_rounding_intervals
-            'fd1388' + // begin_interval
-            'fd2710', // rounding_mod
+          '01' + // type disjoint_negotiation_fields
+            '01' + // num_disjoint_events
+            '00' + // type single_negotiation_fields
+            '01' + // num_rounding_intervals
+            '0000000000001388' + // begin_interval
+            '0000000000002710', // rounding_mod
         );
       });
     });
@@ -75,121 +133,104 @@ describe('NegotiationFields', () => {
     describe('deserialize', () => {
       it('deserializes', () => {
         const buf = Buffer.from(
-          "fdd828" + // type negotiation_fields_v1
-          "0c" + // length
-          "fda724" + // type rounding_intervals_v0
-          "08" + // length
-          "0001" + // num_rounding_intervals
-          "fd1388" + // begin_interval
-          "fd2710" // rounding_mod
+          "01" + // type disjoint_negotiation_fields
+          "01" + // num_disjoint_events
+          "00" + // type single_negotiation_fields
+          "01" + // num_rounding_intervals
+          "0000000000001388" + // begin_interval
+          "0000000000002710" // rounding_mod
           , "hex"
         ); // prettier-ignore
-
         const unknownInstance = NegotiationFields.deserialize(buf);
 
-        if (unknownInstance.type === MessageType.NegotiationFieldsV1) {
-          const instance = unknownInstance as NegotiationFieldsV1;
+        expect(unknownInstance).to.be.instanceof(DisjointNegotiationFields);
+        expect(
+          instance.negotiationFieldsList[0].serialize().toString('hex'),
+        ).to.equal(
+          '00' + // type single_negotiation_fields
+            '01' + // num_rounding_intervals
+            '0000000000001388' + // begin_interval
+            '0000000000002710', // rounding_mod
+        );
+      });
+    });
 
-          expect(Number(instance.length)).to.equal(12);
+    describe('toPre163', () => {
+      it('returns pre-163 instance', () => {
+        const pre163 = NegotiationFields.toPre163(instance);
+        expect(pre163).to.be.instanceof(NegotiationFieldsV2Pre163);
+        expect(
+          (pre163 as NegotiationFieldsV2Pre163).negotiationFieldsList.length,
+        ).to.equal(instance.negotiationFieldsList.length);
+        for (
+          let i = 0;
+          i <
+          (pre163 as NegotiationFieldsV2Pre163).negotiationFieldsList.length;
+          i++
+        ) {
           expect(
-            instance.roundingIntervals.serialize().toString('hex'),
-          ).to.equal(
-            'fda724' + // type rounding_intervals_v0
-              '08' + // length
-              '0001' + // num_rounding_intervals
-              'fd1388' + // begin_interval
-              'fd2710', // rounding_mod
+            (pre163 as NegotiationFieldsV2Pre163).negotiationFieldsList[i],
+          ).to.be.instanceof(NegotiationFieldsV1Pre163);
+          expect(
+            ((pre163 as NegotiationFieldsV2Pre163).negotiationFieldsList[
+              i
+            ] as NegotiationFieldsV1Pre163).roundingIntervals,
+          ).to.be.instanceof(RoundingIntervalsV0Pre163);
+          expect(
+            ((pre163 as NegotiationFieldsV2Pre163).negotiationFieldsList[
+              i
+            ] as NegotiationFieldsV1Pre163).roundingIntervals.intervals,
+          ).to.deep.equal(
+            (instance.negotiationFieldsList[i] as SingleNegotiationFields)
+              .roundingIntervals.intervals,
           );
         }
       });
     });
-  });
 
-  describe('NegotiationFieldsV2', () => {
-    describe('serialize', () => {
-      it('serializes', () => {
-        const instance = new NegotiationFieldsV2();
+    describe('fromPre163', () => {
+      const intervals = [
+        { beginInterval: 1n, roundingMod: 2n },
+        { beginInterval: 3n, roundingMod: 4n },
+      ];
+      const roundingIntervalsPre163 = new RoundingIntervalsV0Pre163();
+      const negociationFieldV1Pre163 = new NegotiationFieldsV1Pre163();
+      const pre163 = new NegotiationFieldsV2Pre163();
 
-        instance.length = BigInt(21);
-        instance.negotiationFieldsList = [
-          NegotiationFields.deserialize(
-            Buffer.from(
-              'fdd828' + // type negotiation_fields_v1
-                '0c' + // length
-                'fda724' + // type rounding_intervals_v0
-                '08' + // length
-                '0001' + // num_rounding_intervals
-                'fd1388' + // begin_interval
-                'fd2710', // rounding_mod
-              'hex',
-            ),
-          ),
-          NegotiationFields.deserialize(
-            Buffer.from(
-              'fdd826' + // type negotiation_fields_v0
-                '00', // length
-              'hex',
-            ),
-          ),
-        ];
-
-        expect(instance.serialize().toString('hex')).to.equal(
-          'fdd832' + // type negotiation_fields_v2
-            '15' + // length
-            '02' + // num_disjoint_events
-            'fdd828' + // type negotiation_fields_v1
-            '0c' + // length
-            'fda724' + // type rounding_intervals_v0
-            '08' + // length
-            '0001' + // num_rounding_intervals
-            'fd1388' + // begin_interval
-            'fd2710' + // rounding_mod
-            'fdd826' + // type negotiation_fields_v0
-            '00', // length
-        );
+      before(() => {
+        roundingIntervalsPre163.intervals = intervals;
+        negociationFieldV1Pre163.roundingIntervals = roundingIntervalsPre163;
+        pre163.negotiationFieldsList = [];
+        pre163.negotiationFieldsList.push(negociationFieldV1Pre163);
       });
-    });
 
-    describe('deserialize', () => {
-      it('deserializes', () => {
-        const buf = Buffer.from(
-          "fdd832" + // type negotiation_fields_v2
-          "15" + // length
-          "02" + // num_disjoint_events
-          "fdd828" + // type negotiation_fields_v1
-          "0c" + // length
-          "fda724" + // type rounding_intervals_v0
-          "08" + // length
-          "0001" + // num_rounding_intervals
-          "fd1388" + // begin_interval
-          "fd2710" + // rounding_mod
-          "fdd826" + // type negotiation_fields_v0
-          "00" // length
-          , "hex"
-        ); // prettier-ignore
-
-        const unknownInstance = NegotiationFields.deserialize(buf);
-
-        if (unknownInstance.type === MessageType.NegotiationFieldsV2) {
-          const instance = unknownInstance as NegotiationFieldsV2;
-
-          expect(Number(instance.length)).to.equal(21);
+      it('returns post-163 instance', () => {
+        const post163 = NegotiationFields.fromPre163(pre163);
+        expect(post163).to.be.instanceof(DisjointNegotiationFields);
+        expect(
+          (post163 as DisjointNegotiationFields).negotiationFieldsList.length,
+        ).to.equal(pre163.negotiationFieldsList.length);
+        for (
+          let i = 0;
+          i <
+          (post163 as DisjointNegotiationFields).negotiationFieldsList.length;
+          i++
+        ) {
           expect(
-            instance.negotiationFieldsList[0].serialize().toString('hex'),
-          ).to.equal(
-            'fdd828' + // type negotiation_fields_v1
-              '0c' + // length
-              'fda724' + // type rounding_intervals_v0
-              '08' + // length
-              '0001' + // num_rounding_intervals
-              'fd1388' + // begin_interval
-              'fd2710', // rounding_mod
-          );
+            (post163 as DisjointNegotiationFields).negotiationFieldsList[i],
+          ).to.be.instanceof(SingleNegotiationFields);
           expect(
-            instance.negotiationFieldsList[1].serialize().toString('hex'),
-          ).to.equal(
-            'fdd826' + // type negotiation_fields_v0
-              '00', // length
+            ((post163 as DisjointNegotiationFields).negotiationFieldsList[
+              i
+            ] as SingleNegotiationFields).roundingIntervals,
+          ).to.be.instanceof(RoundingIntervals);
+          expect(
+            ((post163 as DisjointNegotiationFields).negotiationFieldsList[
+              i
+            ] as SingleNegotiationFields).roundingIntervals.intervals,
+          ).to.deep.equal(
+            (pre163.negotiationFieldsList[i] as NegotiationFieldsV1Pre163)
+              .roundingIntervals.intervals,
           );
         }
       });

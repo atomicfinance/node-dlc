@@ -1,6 +1,6 @@
 import {
   DlcIdsV0,
-  OracleEventContainerV0,
+  OracleEventContainerV0Pre167,
   OracleIdentifierV0,
 } from '@node-dlc/messaging';
 import { sha256 } from '@node-lightning/crypto';
@@ -13,13 +13,15 @@ enum Prefix {
 }
 
 export class RocksdbOracleStore extends RocksdbBase {
-  public async findOracleEventContainers(): Promise<OracleEventContainerV0[]> {
+  public async findOracleEventContainers(): Promise<
+    OracleEventContainerV0Pre167[]
+  > {
     return new Promise((resolve, reject) => {
       const stream = this._db.createReadStream();
-      const results: OracleEventContainerV0[] = [];
+      const results: OracleEventContainerV0Pre167[] = [];
       stream.on('data', (data) => {
         if (data.key[0] === Prefix.OracleEventContainerV0) {
-          results.push(OracleEventContainerV0.deserialize(data.value));
+          results.push(OracleEventContainerV0Pre167.deserialize(data.value));
         }
       });
       stream.on('end', () => {
@@ -31,18 +33,18 @@ export class RocksdbOracleStore extends RocksdbBase {
 
   public async findOracleEventContainer(
     announcementId: Buffer,
-  ): Promise<OracleEventContainerV0> {
+  ): Promise<OracleEventContainerV0Pre167> {
     const key = Buffer.concat([
       Buffer.from([Prefix.OracleEventContainerV0]),
       announcementId,
     ]);
     const raw = await this._safeGet<Buffer>(key);
     if (!raw) return;
-    return OracleEventContainerV0.deserialize(raw);
+    return OracleEventContainerV0Pre167.deserialize(raw);
   }
 
   public async saveOracleEventContainer(
-    oracleEventContainer: OracleEventContainerV0,
+    oracleEventContainer: OracleEventContainerV0Pre167,
   ): Promise<void> {
     const value = oracleEventContainer.serialize();
     const announcementId = sha256(

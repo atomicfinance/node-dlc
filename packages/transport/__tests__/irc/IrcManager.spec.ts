@@ -1,4 +1,3 @@
-// tslint:disable: no-unused-expression
 import { ECPair } from 'bitcoinjs-lib';
 import chai from 'chai';
 import sinonChai from 'sinon-chai';

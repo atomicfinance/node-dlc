@@ -1,18 +1,18 @@
 import { DlcTxBuilder } from '@node-dlc/core';
 import {
-  ContractInfo,
-  ContractInfoV0,
-  ContractInfoV1,
+  SingleContractInfo,
+  DisjointContractInfo,
+  SingleOracleInfo,
   DlcAcceptV0,
   DlcCancelV0,
   DlcCloseV0,
   DlcOfferV0,
   DlcSignV0,
   DlcTransactionsV0,
-  FundingInputV0,
+  FundingInput,
 } from '@node-dlc/messaging';
 import { OutPoint, Script } from '@node-lightning/bitcoin';
-import { sha256, xor } from '@node-lightning/crypto';
+import { xor } from '@node-lightning/crypto';
 import { RocksdbBase } from '@node-lightning/gossip-rocksdb';
 
 enum Prefix {
@@ -58,10 +58,10 @@ export class RocksdbDlcStore extends RocksdbBase {
     });
   }
 
-  public async findDlcOffer(tempContractId: Buffer): Promise<DlcOfferV0> {
+  public async findDlcOffer(temporaryContractId: Buffer): Promise<DlcOfferV0> {
     const key = Buffer.concat([
       Buffer.from([Prefix.DlcOfferV0]),
-      tempContractId,
+      temporaryContractId,
     ]);
     const raw = await this._safeGet<Buffer>(key);
     if (!raw) return;
@@ -72,8 +72,8 @@ export class RocksdbDlcStore extends RocksdbBase {
     tempContractIds: Buffer[],
   ): Promise<DlcOfferV0[]> {
     const dlcOffers = await Promise.all(
-      tempContractIds.map((tempContractId) =>
-        this.findDlcOffer(tempContractId),
+      tempContractIds.map((temporaryContractId) =>
+        this.findDlcOffer(temporaryContractId),
       ),
     );
     return dlcOffers.filter((dlcOffer) => !!dlcOffer);
@@ -86,18 +86,20 @@ export class RocksdbDlcStore extends RocksdbBase {
       stream.on('data', (data) => {
         if (data.key[0] === Prefix.DlcOfferV0) {
           const dlcOffer = DlcOfferV0.deserialize(data.value);
-          if (dlcOffer.contractInfo.type === ContractInfoV0.type) {
+          if (dlcOffer.contractInfo.type === SingleContractInfo.type) {
             if (
-              (dlcOffer.contractInfo as ContractInfoV0).oracleInfo.announcement
-                .oracleEvent.eventId === eventId
+              ((dlcOffer.contractInfo as SingleContractInfo)
+                .oracleInfo as SingleOracleInfo).announcement.oracleEvent
+                .eventId === eventId
             ) {
               results.push(dlcOffer);
             }
-          } else if (dlcOffer.contractInfo.type === ContractInfoV1.type) {
-            (dlcOffer.contractInfo as ContractInfoV1).contractOraclePairs.some(
+          } else if (dlcOffer.contractInfo.type === DisjointContractInfo.type) {
+            (dlcOffer.contractInfo as DisjointContractInfo).contractOraclePairs.some(
               (pair) => {
                 if (
-                  pair.oracleInfo.announcement.oracleEvent.eventId === eventId
+                  (pair.oracleInfo as SingleOracleInfo).announcement.oracleEvent
+                    .eventId === eventId
                 ) {
                   results.push(dlcOffer);
                   return true; // Returning true will stop the iteration since we've found a match
@@ -117,18 +119,17 @@ export class RocksdbDlcStore extends RocksdbBase {
 
   public async saveDlcOffer(dlcOffer: DlcOfferV0): Promise<void> {
     const value = dlcOffer.serialize();
-    const tempContractId = sha256(value);
     const key = Buffer.concat([
       Buffer.from([Prefix.DlcOfferV0]),
-      tempContractId,
+      dlcOffer.temporaryContractId,
     ]);
     await this._db.put(key, value);
   }
 
-  public async deleteDlcOffer(tempContractId: Buffer): Promise<void> {
+  public async deleteDlcOffer(temporaryContractId: Buffer): Promise<void> {
     const key = Buffer.concat([
       Buffer.from([Prefix.DlcOfferV0]),
-      tempContractId,
+      temporaryContractId,
     ]);
     await this._db.del(key);
   }
@@ -200,10 +201,10 @@ export class RocksdbDlcStore extends RocksdbBase {
     return this.findDlcAccept(contractId);
   }
 
-  public async findContractIdFromTemp(tempContractId: Buffer): Promise<Buffer> {
+  public async findContractIdFromTemp(temporaryContractId: Buffer): Promise<Buffer> {
     const key = Buffer.concat([
       Buffer.from([Prefix.TempContractId]),
-      tempContractId,
+      temporaryContractId,
     ]);
     const contractId = await this._safeGet<Buffer>(key);
     return contractId;
@@ -216,7 +217,7 @@ export class RocksdbDlcStore extends RocksdbBase {
       contractIds.map(async (contractId) => {
         const dlcAccept = await this.findDlcAccept(contractId, false);
         if (!dlcAccept) return;
-        return [contractId, dlcAccept.tempContractId] as [Buffer, Buffer];
+        return [contractId, dlcAccept.temporaryContractId] as [Buffer, Buffer];
       }),
     );
 
@@ -226,18 +227,18 @@ export class RocksdbDlcStore extends RocksdbBase {
   }
 
   public async saveDlcAccept(dlcAccept: DlcAcceptV0): Promise<void> {
-    const dlcOffer = await this.findDlcOffer(dlcAccept.tempContractId);
+    const dlcOffer = await this.findDlcOffer(dlcAccept.temporaryContractId);
     const txBuilder = new DlcTxBuilder(dlcOffer, dlcAccept.withoutSigs());
     const tx = txBuilder.buildFundingTransaction();
     const fundingTxid = tx.txId.serialize();
-    const contractId = xor(fundingTxid, dlcAccept.tempContractId);
+    const contractId = xor(fundingTxid, dlcAccept.temporaryContractId);
     const value = dlcAccept.serialize();
     const key = Buffer.concat([Buffer.from([Prefix.DlcAcceptV0]), contractId]);
     await this._db.put(key, value);
 
     // store funding input outpoint reference
     for (let i = 0; i < dlcAccept.fundingInputs.length; i++) {
-      const fundingInput = dlcAccept.fundingInputs[i] as FundingInputV0;
+      const fundingInput = dlcAccept.fundingInputs[i] as FundingInput;
 
       const outpoint = OutPoint.fromString(
         `${fundingInput.prevTx.txId.toString()}:${fundingInput.prevTxVout}`,
@@ -252,7 +253,7 @@ export class RocksdbDlcStore extends RocksdbBase {
 
     const key3 = Buffer.concat([
       Buffer.from([Prefix.TempContractId]),
-      dlcAccept.tempContractId,
+      dlcAccept.temporaryContractId,
     ]);
     await this._db.put(key3, contractId);
   }

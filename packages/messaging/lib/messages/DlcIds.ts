@@ -1,17 +1,20 @@
 import { BufferReader, BufferWriter } from '@node-lightning/bufio';
+import assert from 'assert';
 
 import { MessageType } from '../MessageType';
 import { IDlcMessage } from './DlcMessage';
 
 export abstract class DlcIds {
-  public static deserialize(buf: Buffer): DlcIdsV0 {
-    const reader = new BufferReader(buf);
+  public static deserialize(reader: Buffer | BufferReader): DlcIdsV0 {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    const type = Number(reader.readUInt16BE());
+    const tempReader = new BufferReader(reader.peakBytes());
+
+    const type = Number(tempReader.readUInt16BE());
 
     switch (type) {
       case MessageType.DlcIdsV0:
-        return DlcIdsV0.deserialize(buf);
+        return DlcIdsV0.deserialize(reader);
       default:
         throw new Error(`DLC IDs message type must be DlcIdsV0`);
     }
@@ -30,13 +33,15 @@ export class DlcIdsV0 extends DlcIds implements IDlcMessage {
 
   /**
    * Deserializes an dlc_ids_v0 message
-   * @param buf
+   * @param reader
    */
-  public static deserialize(buf: Buffer): DlcIdsV0 {
+  public static deserialize(reader: Buffer | BufferReader): DlcIdsV0 {
     const instance = new DlcIdsV0();
-    const reader = new BufferReader(buf);
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    reader.readUInt16BE(); // read type
+    const type = reader.readUInt16BE();
+    assert(type === this.type, `Expected DlcIdsV0, got type ${type}`);
+
     const idsLen = reader.readBigSize(); // ids length
 
     for (let i = 0; i < idsLen; i++) {

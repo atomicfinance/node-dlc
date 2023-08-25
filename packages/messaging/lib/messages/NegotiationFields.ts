@@ -1,117 +1,130 @@
 import { BufferReader, BufferWriter } from '@node-lightning/bufio';
+import assert from 'assert';
 
-import { MessageType } from '../MessageType';
-import { getTlv } from '../serialize/getTlv';
 import { IDlcMessage } from './DlcMessage';
-import { RoundingIntervalsV0 } from './RoundingIntervalsV0';
-import { IRoundingIntervalsV0JSON } from './RoundingIntervalsV0';
+import {
+  NegotiationFieldsPre163,
+  NegotiationFieldsV0Pre163,
+  NegotiationFieldsV1Pre163,
+  NegotiationFieldsV2Pre163,
+} from './pre-163/NegotiationFields';
+import { IRoundingIntervalsJSON, RoundingIntervals } from './RoundingIntervals';
+
+export enum NegotiationFieldsType {
+  Single = 0,
+  Disjoint = 1,
+}
 
 export abstract class NegotiationFields {
   public static deserialize(
-    buf: Buffer,
-  ): NegotiationFieldsV0 | NegotiationFieldsV1 | NegotiationFieldsV2 {
-    const reader = new BufferReader(buf);
+    reader: Buffer | BufferReader,
+  ): SingleNegotiationFields | DisjointNegotiationFields {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    const type = Number(reader.readBigSize());
+    const tempReader = new BufferReader(reader.peakBytes());
+    const type = Number(tempReader.readBigSize());
 
     switch (type) {
-      case MessageType.NegotiationFieldsV0:
-        return NegotiationFieldsV0.deserialize(buf);
-      case MessageType.NegotiationFieldsV1:
-        return NegotiationFieldsV1.deserialize(buf);
-      case MessageType.NegotiationFieldsV2:
-        return NegotiationFieldsV2.deserialize(buf);
+      case NegotiationFieldsType.Single:
+        return SingleNegotiationFields.deserialize(reader);
+      case NegotiationFieldsType.Disjoint:
+        return DisjointNegotiationFields.deserialize(reader);
       default:
         throw new Error(
-          `Negotiation fields TLV type must be NegotiationFieldsV0, NegotiationFieldsV1 or NegotiationFieldsV2`,
+          `Negotiation fields TLV type must be SingleNegotiationFields or DisjointNegotiationFields`,
         );
+    }
+  }
+
+  public static fromPre163(
+    negotiationFields: NegotiationFieldsPre163,
+  ): NegotiationFields {
+    if (negotiationFields instanceof NegotiationFieldsV0Pre163) {
+      return null;
+    } else if (negotiationFields instanceof NegotiationFieldsV1Pre163) {
+      return SingleNegotiationFields.fromPre163(negotiationFields);
+    } else if (negotiationFields instanceof NegotiationFieldsV2Pre163) {
+      return DisjointNegotiationFields.fromPre163(negotiationFields);
+    } else {
+      throw new Error(
+        'Negotiation fields must be NegotiationFieldsV0 or NegotiationFieldsV1 or NegotiationFieldsV2',
+      );
+    }
+  }
+
+  public static toPre163(
+    negotiationFields: NegotiationFields,
+  ): NegotiationFieldsPre163 {
+    if (negotiationFields instanceof SingleNegotiationFields) {
+      return SingleNegotiationFields.toPre163(negotiationFields);
+    } else if (negotiationFields instanceof DisjointNegotiationFields) {
+      return DisjointNegotiationFields.toPre163(negotiationFields);
+    } else {
+      throw new Error(
+        'Negotiation fields must be SingleNegotiationFields or DisjointNegotiationFields',
+      );
     }
   }
 
   public abstract type: number;
 
-  public abstract length: bigint;
-
   public abstract toJSON():
-    | INegotiationFieldsV0JSON
-    | INegotiationFieldsV1JSON
-    | INegotiationFieldsV2JSON;
+    | ISingleNegotiationFieldsJSON
+    | IDisjointNegotiationFieldsJSON;
 
   public abstract serialize(): Buffer;
-}
-
-/**
- * NegotiationFields V0 contains preferences of the accepter of a DLC
- * which are taken into account during DLC construction.
- */
-export class NegotiationFieldsV0
-  extends NegotiationFields
-  implements IDlcMessage {
-  public static type = MessageType.NegotiationFieldsV0;
-
-  /**
-   * Deserializes an negotiation_fields_v0 message
-   * @param buf
-   */
-  public static deserialize(buf: Buffer): NegotiationFieldsV0 {
-    const instance = new NegotiationFieldsV0();
-    const reader = new BufferReader(buf);
-
-    reader.readBigSize(); // read type
-    instance.length = reader.readBigSize();
-
-    return instance;
-  }
-
-  /**
-   * The type for negotiation_fields_v0 message. negotiation_fields_v0 = 55334
-   */
-  public type = NegotiationFieldsV0.type;
-
-  public length: bigint;
-
-  /**
-   * Converts negotiation_fields_v0 to JSON
-   */
-  public toJSON(): INegotiationFieldsV0JSON {
-    return {
-      type: this.type,
-    };
-  }
-
-  /**
-   * Serializes the negotiation_fields_v0 message into a Buffer
-   */
-  public serialize(): Buffer {
-    const writer = new BufferWriter();
-    writer.writeBigSize(this.type);
-    writer.writeBigSize(0);
-
-    return writer.toBuffer();
-  }
 }
 
 /**
  * NegotiationFields V1 contains preferences of the acceptor of a DLC
  * which are taken into account during DLC construction.
  */
-export class NegotiationFieldsV1
+export class SingleNegotiationFields
   extends NegotiationFields
   implements IDlcMessage {
-  public static type = MessageType.NegotiationFieldsV1;
+  public static type = NegotiationFieldsType.Single;
 
   /**
    * Deserializes an negotiation_fields_v1 message
-   * @param buf
+   * @param reader
    */
-  public static deserialize(buf: Buffer): NegotiationFieldsV1 {
-    const instance = new NegotiationFieldsV1();
-    const reader = new BufferReader(buf);
+  public static deserialize(
+    reader: Buffer | BufferReader,
+  ): SingleNegotiationFields {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    reader.readBigSize(); // read type
-    instance.length = reader.readBigSize();
-    instance.roundingIntervals = RoundingIntervalsV0.deserialize(
-      getTlv(reader),
+    const instance = new SingleNegotiationFields();
+
+    const type = Number(reader.readBigSize());
+    assert(
+      type === this.type,
+      `Expected NegotiationFieldsType.Single, got type ${type}`,
+    );
+
+    instance.roundingIntervals = RoundingIntervals.deserialize(reader);
+
+    return instance;
+  }
+
+  public static fromPre163(
+    negotiationFields: NegotiationFieldsV1Pre163,
+  ): SingleNegotiationFields {
+    const instance = new SingleNegotiationFields();
+
+    instance.roundingIntervals = RoundingIntervals.fromPre163(
+      negotiationFields.roundingIntervals,
+    );
+
+    return instance;
+  }
+
+  public static toPre163(
+    negotiationFields: SingleNegotiationFields,
+  ): NegotiationFieldsV1Pre163 {
+    const instance = new NegotiationFieldsV1Pre163();
+
+    instance.roundingIntervals = RoundingIntervals.toPre163(
+      negotiationFields.roundingIntervals,
     );
 
     return instance;
@@ -120,18 +133,15 @@ export class NegotiationFieldsV1
   /**
    * The type for negotiation_fields_v1 message. negotiation_fields_v1 = 55336
    */
-  public type = NegotiationFieldsV1.type;
+  public type = SingleNegotiationFields.type;
 
-  public length: bigint;
-
-  public roundingIntervals: RoundingIntervalsV0;
+  public roundingIntervals: RoundingIntervals;
 
   /**
    * Converts negotiation_fields_v1 to JSON
    */
-  public toJSON(): INegotiationFieldsV1JSON {
+  public toJSON(): ISingleNegotiationFieldsJSON {
     return {
-      type: this.type,
       roundingIntervals: this.roundingIntervals.toJSON(),
     };
   }
@@ -146,7 +156,6 @@ export class NegotiationFieldsV1
     const dataWriter = new BufferWriter();
     dataWriter.writeBytes(this.roundingIntervals.serialize());
 
-    writer.writeBigSize(dataWriter.size);
     writer.writeBytes(dataWriter.toBuffer());
 
     return writer.toBuffer();
@@ -157,28 +166,59 @@ export class NegotiationFieldsV1
  * NegotiationFields V2 contains preferences of the acceptor of a DLC
  * which are taken into account during DLC construction.
  */
-export class NegotiationFieldsV2
+export class DisjointNegotiationFields
   extends NegotiationFields
   implements IDlcMessage {
-  public static type = MessageType.NegotiationFieldsV2;
+  public static type = NegotiationFieldsType.Disjoint;
 
   /**
    * Deserializes an negotiation_fields_v1 message
-   * @param buf
+   * @param reader
    */
-  public static deserialize(buf: Buffer): NegotiationFieldsV2 {
-    const instance = new NegotiationFieldsV2();
-    const reader = new BufferReader(buf);
+  public static deserialize(
+    reader: Buffer | BufferReader,
+  ): DisjointNegotiationFields {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    reader.readBigSize(); // read type
-    instance.length = reader.readBigSize();
-    reader.readBigSize(); // num_disjoint_events
+    const instance = new DisjointNegotiationFields();
 
-    while (!reader.eof) {
+    const type = Number(reader.readBigSize());
+    assert(
+      type === this.type,
+      `Expected NegotiationFieldsType.Disjoint, got type ${type}`,
+    );
+
+    const numDisjointEvents = reader.readBigSize(); // num_disjoint_events
+
+    for (let i = 0; i < numDisjointEvents; i++) {
       instance.negotiationFieldsList.push(
-        NegotiationFields.deserialize(getTlv(reader)),
+        NegotiationFields.deserialize(reader),
       );
     }
+
+    return instance;
+  }
+
+  public static fromPre163(
+    negotiationFields: NegotiationFieldsV2Pre163,
+  ): DisjointNegotiationFields {
+    const instance = new DisjointNegotiationFields();
+
+    instance.negotiationFieldsList = negotiationFields.negotiationFieldsList.map(
+      NegotiationFields.fromPre163,
+    );
+
+    return instance;
+  }
+
+  public static toPre163(
+    negotiationFields: DisjointNegotiationFields,
+  ): NegotiationFieldsV2Pre163 {
+    const instance = new NegotiationFieldsV2Pre163();
+
+    instance.negotiationFieldsList = negotiationFields.negotiationFieldsList.map(
+      NegotiationFields.toPre163,
+    );
 
     return instance;
   }
@@ -186,18 +226,15 @@ export class NegotiationFieldsV2
   /**
    * The type for negotiation_fields_v2 message. negotiation_fields_v2 = 55346
    */
-  public type = NegotiationFieldsV2.type;
-
-  public length: bigint;
+  public type = DisjointNegotiationFields.type;
 
   public negotiationFieldsList: NegotiationFields[] = [];
 
   /**
    * Converts negotiation_fields_v2 to JSON
    */
-  public toJSON(): INegotiationFieldsV2JSON {
+  public toJSON(): IDisjointNegotiationFieldsJSON {
     return {
-      type: this.type,
       negotiationFieldsList: this.negotiationFieldsList.map((field) =>
         field.toJSON(),
       ),
@@ -218,25 +255,20 @@ export class NegotiationFieldsV2
       dataWriter.writeBytes(negotiationFields.serialize());
     }
 
-    writer.writeBigSize(dataWriter.size);
     writer.writeBytes(dataWriter.toBuffer());
     return writer.toBuffer();
   }
 }
 
-export interface INegotiationFieldsV0JSON {
-  type: number;
+// TODO: fix JSON here
+
+export interface ISingleNegotiationFieldsJSON {
+  roundingIntervals: IRoundingIntervalsJSON;
 }
 
-export interface INegotiationFieldsV1JSON {
-  type: number;
-  roundingIntervals: IRoundingIntervalsV0JSON;
-}
-
-export interface INegotiationFieldsV2JSON {
-  type: number;
-  negotiationFieldsList:
-    | INegotiationFieldsV0JSON[]
-    | INegotiationFieldsV1JSON[]
-    | INegotiationFieldsV2JSON[];
+export interface IDisjointNegotiationFieldsJSON {
+  negotiationFieldsList: (
+    | ISingleNegotiationFieldsJSON
+    | IDisjointNegotiationFieldsJSON
+  )[];
 }

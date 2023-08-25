@@ -1,13 +1,13 @@
 import { Value } from '@node-dlc/bitcoin';
 import {
-  ContractDescriptorV1,
-  ContractInfoV0,
-  DigitDecompositionEventDescriptorV0,
+  NumericContractDescriptor,
+  SingleContractInfo,
+  DigitDecompositionEventDescriptorV0Pre167,
   DlcOfferV0,
-  OracleAnnouncementV0,
-  OracleEventV0,
-  OracleInfoV0,
-  PayoutFunctionV0,
+  OracleAnnouncementV0Pre167,
+  OracleEventV0Pre167,
+  SingleOracleInfo,
+  PayoutFunction,
   PolynomialPayoutCurvePiece,
 } from '@node-dlc/messaging';
 import { BitcoinNetworks } from 'bitcoin-networks';
@@ -28,39 +28,39 @@ import {
 const buildCsoDlcOfferFixture = (
   oracleDigits: number,
   expiry: Date,
-  payoutFunction: PayoutFunctionV0,
+  payoutFunction: PayoutFunction,
   totalCollateral: bigint,
   offerCollateral: bigint,
 ): DlcOfferV0 => {
-  const eventDescriptor = new DigitDecompositionEventDescriptorV0();
+  const eventDescriptor = new DigitDecompositionEventDescriptorV0Pre167();
   eventDescriptor.base = 2;
   eventDescriptor.isSigned = false;
   eventDescriptor.unit = 'bits';
   eventDescriptor.precision = 0;
   eventDescriptor.nbDigits = oracleDigits;
 
-  const oracleEvent = new OracleEventV0();
+  const oracleEvent = new OracleEventV0Pre167();
   oracleEvent.eventMaturityEpoch = Math.floor(expiry.getTime() / 1000);
   oracleEvent.eventDescriptor = eventDescriptor;
 
-  const oracleAnnouncement = new OracleAnnouncementV0();
+  const oracleAnnouncement = new OracleAnnouncementV0Pre167();
   oracleAnnouncement.oracleEvent = oracleEvent;
 
-  const oracleInfo = new OracleInfoV0();
+  const oracleInfo = new SingleOracleInfo();
   oracleInfo.announcement = oracleAnnouncement;
 
-  const contractDescriptor = new ContractDescriptorV1();
+  const contractDescriptor = new NumericContractDescriptor();
   contractDescriptor.numDigits = oracleDigits;
   contractDescriptor.payoutFunction = payoutFunction;
 
-  const contractInfo = new ContractInfoV0();
+  const contractInfo = new SingleContractInfo();
   contractInfo.totalCollateral = totalCollateral;
   contractInfo.contractDescriptor = contractDescriptor;
   contractInfo.oracleInfo = oracleInfo;
 
   const dlcOffer = new DlcOfferV0();
   dlcOffer.contractInfo = contractInfo;
-  dlcOffer.offerCollateralSatoshis = offerCollateral;
+  dlcOffer.offerCollateral = offerCollateral;
 
   return dlcOffer;
 };
@@ -131,7 +131,7 @@ describe('CsoInfo', () => {
       });
     });
 
-    it('should throw if offerCollateralSatoshis does not match calculated offerCollateral', () => {
+    it('should throw if offerCollateral does not match calculated offerCollateral', () => {
       const { payoutFunction } = LinearPayout.buildPayoutFunction(
         minPayout,
         maxPayout,
@@ -149,24 +149,24 @@ describe('CsoInfo', () => {
         offerCollateralValue,
       );
 
-      dlcOffer.offerCollateralSatoshis -= BigInt(10000);
+      dlcOffer.offerCollateral -= BigInt(10000);
 
       expect(() => getCsoInfoFromOffer(dlcOffer)).to.throw(Error);
     });
 
     it('should get correct CsoInfo from ContractInfo with fees shifted', () => {
-      const eventDescriptor = new DigitDecompositionEventDescriptorV0();
+      const eventDescriptor = new DigitDecompositionEventDescriptorV0Pre167();
       eventDescriptor.base = 2;
       eventDescriptor.isSigned = false;
       eventDescriptor.unit = 'bits';
       eventDescriptor.precision = 0;
       eventDescriptor.nbDigits = oracleDigits;
 
-      const oracleEvent = new OracleEventV0();
+      const oracleEvent = new OracleEventV0Pre167();
       oracleEvent.eventMaturityEpoch = Math.floor(expiry.getTime() / 1000);
       oracleEvent.eventDescriptor = eventDescriptor;
 
-      const oracleAnnouncement = new OracleAnnouncementV0();
+      const oracleAnnouncement = new OracleAnnouncementV0Pre167();
       oracleAnnouncement.oracleEvent = oracleEvent;
 
       const contractSize = Value.fromBitcoin(1);
@@ -223,18 +223,18 @@ describe('CsoInfo', () => {
     });
 
     it('should get correct CsoInfo from ContractInfo with fees shifted contract size 0.01', () => {
-      const eventDescriptor = new DigitDecompositionEventDescriptorV0();
+      const eventDescriptor = new DigitDecompositionEventDescriptorV0Pre167();
       eventDescriptor.base = 2;
       eventDescriptor.isSigned = false;
       eventDescriptor.unit = 'bits';
       eventDescriptor.precision = 0;
       eventDescriptor.nbDigits = oracleDigits;
 
-      const oracleEvent = new OracleEventV0();
+      const oracleEvent = new OracleEventV0Pre167();
       oracleEvent.eventMaturityEpoch = Math.floor(expiry.getTime() / 1000);
       oracleEvent.eventDescriptor = eventDescriptor;
 
-      const oracleAnnouncement = new OracleAnnouncementV0();
+      const oracleAnnouncement = new OracleAnnouncementV0Pre167();
       oracleAnnouncement.oracleEvent = oracleEvent;
 
       const contractSize = Value.fromBitcoin(0.01);
@@ -298,18 +298,18 @@ describe('CsoInfo', () => {
         it(`should get correct CsoInfo from ContractInfo with fees shifted contract size ${contractSizeNum} and fee ${fee}`, () => {
           const contractSize = Value.fromBitcoin(contractSizeNum);
 
-          const eventDescriptor = new DigitDecompositionEventDescriptorV0();
+          const eventDescriptor = new DigitDecompositionEventDescriptorV0Pre167();
           eventDescriptor.base = 2;
           eventDescriptor.isSigned = false;
           eventDescriptor.unit = 'bits';
           eventDescriptor.precision = 0;
           eventDescriptor.nbDigits = oracleDigits;
 
-          const oracleEvent = new OracleEventV0();
+          const oracleEvent = new OracleEventV0Pre167();
           oracleEvent.eventMaturityEpoch = Math.floor(expiry.getTime() / 1000);
           oracleEvent.eventDescriptor = eventDescriptor;
 
-          const oracleAnnouncement = new OracleAnnouncementV0();
+          const oracleAnnouncement = new OracleAnnouncementV0Pre167();
           oracleAnnouncement.oracleEvent = oracleEvent;
 
           const maxLoss = Value.fromBitcoin(0.2);

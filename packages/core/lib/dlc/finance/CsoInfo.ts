@@ -1,23 +1,23 @@
 import { Value } from '@node-dlc/bitcoin';
 import {
-  ContractDescriptorV1,
+  NumericContractDescriptor,
+  ContractDescriptorType,
   ContractInfo,
-  ContractInfoV0,
-  DigitDecompositionEventDescriptorV0,
+  ContractInfoType,
+  SingleContractInfo,
+  SingleOracleInfo,
+  DigitDecompositionEventDescriptorV0Pre167,
   MessageType,
   OrderCsoInfo,
   OrderCsoInfoV0,
-  PayoutFunctionV0,
+  PayoutFunction,
   PolynomialPayoutCurvePiece,
+  PayoutCurvePieceType,
 } from '@node-dlc/messaging';
 import assert from 'assert';
 
 import { DlcParty, roundToNearestMultiplier, UNIT_MULTIPLIER } from './Builder';
-import {
-  HasContractInfo,
-  HasOfferCollateralSatoshis,
-  HasType,
-} from './OptionInfo';
+import { HasContractInfo, HasOfferCollateral, HasType } from './OptionInfo';
 
 export interface CsoInfo {
   maxLoss: Value;
@@ -46,19 +46,19 @@ export const getCsoInfoFromContractInfo = (
   shiftForFees: DlcParty = 'neither',
   fees: Value = Value.fromSats(0),
 ): CsoInfo => {
-  if (_contractInfo.type !== MessageType.ContractInfoV0)
-    throw Error('Only ContractInfoV0 currently supported');
+  if (_contractInfo.type !== ContractInfoType.Single)
+    throw Error('Only Single ContractInfo currently supported');
 
-  const contractInfo = _contractInfo as ContractInfoV0;
-  if (contractInfo.contractDescriptor.type !== MessageType.ContractDescriptorV1)
-    throw Error('Only ContractDescriptorV1 currently supported');
+  const contractInfo = _contractInfo as SingleContractInfo;
+  if (contractInfo.contractDescriptor.type !== ContractDescriptorType.Numeric)
+    throw Error('Only Numeric ContractDescriptor currently supported');
 
-  const oracleInfo = contractInfo.oracleInfo;
+  const oracleInfo = contractInfo.oracleInfo as SingleOracleInfo;
 
   const { eventMaturityEpoch } = oracleInfo.announcement.oracleEvent;
 
   const eventDescriptor = oracleInfo.announcement.oracleEvent
-    .eventDescriptor as DigitDecompositionEventDescriptorV0;
+    .eventDescriptor as DigitDecompositionEventDescriptorV0Pre167;
 
   if (
     oracleInfo.announcement.oracleEvent.eventDescriptor.type !==
@@ -66,22 +66,22 @@ export const getCsoInfoFromContractInfo = (
   )
     throw Error('Only DigitDecompositionEventDescriptorV0 currently supported');
 
-  const contractDescriptor = contractInfo.contractDescriptor as ContractDescriptorV1;
+  const contractDescriptor = contractInfo.contractDescriptor as NumericContractDescriptor;
   if (contractDescriptor.payoutFunction.type !== MessageType.PayoutFunctionV0)
     throw Error('Only PayoutFunctionV0 currently supported');
 
-  const payoutFunction = contractDescriptor.payoutFunction as PayoutFunctionV0;
+  const payoutFunction = contractDescriptor.payoutFunction as PayoutFunction;
 
   validateCsoPayoutFunction(payoutFunction);
 
-  const initialPiece = payoutFunction.pieces[0];
   const midPiece = payoutFunction.pieces[1];
+  const finalPiece = payoutFunction.pieces[2];
 
-  const minPayout = initialPiece.endpointPayout;
-  const maxPayout = midPiece.endpointPayout;
+  const minPayout = midPiece.endPoint.outcomePayout.sats;
+  const maxPayout = finalPiece.endPoint.outcomePayout.sats;
 
-  const startOutcome = initialPiece.endpoint;
-  const endOutcome = midPiece.endpoint;
+  const startOutcome = midPiece.endPoint.eventOutcome;
+  const endOutcome = finalPiece.endPoint.eventOutcome;
 
   const unit = eventDescriptor.unit;
 
@@ -144,10 +144,7 @@ export const getCsoInfoFromContractInfo = (
  * @returns {CsoInfo}
  */
 export const getCsoInfoFromOffer = (
-  offer: HasContractInfo &
-    HasType &
-    HasOfferCollateralSatoshis &
-    MaybeHasCsoInfo,
+  offer: HasContractInfo & HasType & HasOfferCollateral & MaybeHasCsoInfo,
 ): CsoInfo => {
   if (
     offer.type !== MessageType.DlcOfferV0 &&
@@ -169,7 +166,7 @@ export const getCsoInfoFromOffer = (
     fees,
   );
 
-  if (csoInfo.offerCollateral.sats !== offer.offerCollateralSatoshis)
+  if (csoInfo.offerCollateral.sats !== offer.offerCollateral)
     throw Error('Offer was not generated with CSO ContractInfo');
 
   return csoInfo;
@@ -183,10 +180,10 @@ export const getCsoInfoFromOffer = (
  *
  * All PayoutCurvePieces should be type PolynomialPayoutCurvePieces
  *
- * @param {PayoutFunctionV0} payoutFunction
+ * @param {PayoutFunction} payoutFunction
  */
 export const validateCsoPayoutFunction = (
-  payoutFunction: PayoutFunctionV0,
+  payoutFunction: PayoutFunction,
 ): void => {
   assert(
     payoutFunction.pieces.length === 3,
@@ -194,7 +191,8 @@ export const validateCsoPayoutFunction = (
   );
   for (const [i, piece] of payoutFunction.pieces.entries()) {
     assert(
-      piece.payoutCurvePiece.type === MessageType.PolynomialPayoutCurvePiece,
+      piece.payoutCurvePiece.type ===
+        PayoutCurvePieceType.PolynomialPayoutCurvePiece,
       'CSO Payout Function PayoutCurvePieces must be PolynomialCurvePieces',
     );
 
@@ -208,35 +206,35 @@ export const validateCsoPayoutFunction = (
     );
 
     // endpoints should always be ascending
-    let previousPiece, previousPoints;
-    if (i > 0) {
-      previousPiece = payoutFunction.pieces[i - 1];
-      previousPoints = previousPiece.payoutCurvePiece.points;
+    let nextPiece, nextPoints;
+    if (i < payoutFunction.pieces.length - 1) {
+      nextPiece = payoutFunction.pieces[i + 1];
+      nextPoints = nextPiece.payoutCurvePiece.points;
       assert(
-        previousPiece.endpoint < piece.endpoint,
+        piece.endPoint.eventOutcome < nextPiece.endPoint.eventOutcome,
         'CSO Payout Function point endpoints should be an ascending line',
       );
       assert(
-        previousPoints[1].outcomePayout === points[0].outcomePayout,
+        points[1].outcomePayout === nextPoints[0].outcomePayout,
         'CSO Payout Function point outcome payout should be continuous without gaps',
       );
     }
 
     switch (i) {
       case 0:
-        // endpoints should always be ascending
-        assert(payoutFunction.endpoint0 < piece.endpoint);
-
         // maxLoss should be a flat line
-        assert(payoutFunction.endpointPayout0 === piece.endpointPayout);
-        assert(
-          points[0].outcomePayout === points[1].outcomePayout,
+        assert.equal(
+          points[0].outcomePayout,
+          points[1].outcomePayout,
           'CSO Payout Function maxLoss PayoutCurvePiece point should be a flat line',
         );
         break;
       case 1:
         // maxLoss to maxGain should be an ascending line
-        assert(previousPiece.endpointPayout < piece.endpointPayout);
+        assert(
+          piece.endPoint.outcomePayout.sats <
+            nextPiece.endPoint.outcomePayout.sats,
+        );
         assert(
           points[0].outcomePayout < points[1].outcomePayout,
           'CSO Payout Function maxLoss to maxGain PayoutCurvePiece point should be an ascending line',
@@ -244,10 +242,19 @@ export const validateCsoPayoutFunction = (
         break;
       case 2:
         // maxGain should be a flat line
-        assert(previousPiece.endpointPayout === piece.endpointPayout);
-        assert(
-          points[0].outcomePayout === points[1].outcomePayout,
+        assert.equal(
+          piece.endPoint.outcomePayout.sats,
+          payoutFunction.lastEndpoint.outcomePayout.sats,
+        );
+        assert.equal(
+          points[0].outcomePayout,
+          points[1].outcomePayout,
           'CSO Payout Function maxGain PayoutCurvePiece point should be a flat line',
+        );
+        // endpoints should always be ascending
+        assert(
+          piece.endPoint.eventOutcome <
+            payoutFunction.lastEndpoint.eventOutcome,
         );
         break;
     }

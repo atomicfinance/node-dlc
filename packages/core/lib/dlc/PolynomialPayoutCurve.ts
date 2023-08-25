@@ -1,9 +1,9 @@
 import {
-  MessageType,
-  PayoutFunctionV0,
+  PayoutCurvePieceType,
+  PayoutFunction,
   PolynomialPayoutCurvePiece,
-  RoundingIntervalsV0,
-} from '@node-dlc/messaging';
+  RoundingIntervals
+} from "@node-dlc/messaging";
 import BigNumber from 'bignumber.js';
 
 import { fromPrecision, getPrecision } from '../utils/Precision';
@@ -128,44 +128,25 @@ export class PolynomialPayoutCurve {
    * @returns A list of CETs
    */
   static computePayouts(
-    payoutFunction: PayoutFunctionV0,
+    payoutFunction: PayoutFunction,
     totalCollateral: bigint,
-    roundingIntervals: RoundingIntervalsV0,
+    roundingIntervals: RoundingIntervals,
   ): CETPayout[] {
     if (payoutFunction.pieces.length < 1)
       throw new Error('Must have at least one piece');
 
     payoutFunction.pieces.forEach((piece) => {
       if (
-        piece.payoutCurvePiece.type !== MessageType.PolynomialPayoutCurvePiece
+        piece.payoutCurvePiece.type !== PayoutCurvePieceType.PolynomialPayoutCurvePiece
       )
         throw new Error('Payout curve piece must be a polynomial');
     });
 
     const CETS: CETPayout[] = [];
 
-    // 1. Add the first piece to the list
-    const { payoutCurvePiece } = payoutFunction.pieces[0];
-
-    const curve = this.fromPayoutCurvePiece(
-      payoutCurvePiece as PolynomialPayoutCurvePiece,
-    );
-
-    CETS.push(
-      ...splitIntoRanges(
-        payoutFunction.endpoint0,
-        payoutFunction.pieces[0].endpoint,
-        payoutFunction.endpointPayout0,
-        payoutFunction.pieces[0].endpointPayout,
-        totalCollateral,
-        curve,
-        roundingIntervals.intervals,
-      ),
-    );
-
-    // 2. If there are subsequent pieces, add them to the list
+    // 1. Add payout curve pieces to the list
     for (let i = 1; i < payoutFunction.pieces.length; i++) {
-      const { payoutCurvePiece } = payoutFunction.pieces[i];
+      const { payoutCurvePiece } = payoutFunction.pieces[i - 1];
 
       const curve = this.fromPayoutCurvePiece(
         payoutCurvePiece as PolynomialPayoutCurvePiece,
@@ -173,16 +154,39 @@ export class PolynomialPayoutCurve {
 
       CETS.push(
         ...splitIntoRanges(
-          payoutFunction.pieces[i - 1].endpoint,
-          payoutFunction.pieces[i].endpoint,
-          payoutFunction.pieces[i - 1].endpointPayout,
-          payoutFunction.pieces[i].endpointPayout,
+          payoutFunction.pieces[i - 1].endPoint.eventOutcome,
+          payoutFunction.pieces[i].endPoint.eventOutcome,
+          payoutFunction.pieces[i - 1].endPoint.outcomePayout.sats,
+          payoutFunction.pieces[i].endPoint.outcomePayout.sats,
           totalCollateral,
           curve,
           roundingIntervals.intervals,
         ),
       );
     }
+
+    // 2. Add the last piece to the list
+    const { payoutCurvePiece } = payoutFunction.pieces[
+      payoutFunction.pieces.length - 1
+    ];
+
+    const curve = this.fromPayoutCurvePiece(
+      payoutCurvePiece as PolynomialPayoutCurvePiece,
+    );
+
+    CETS.push(
+      ...splitIntoRanges(
+        payoutFunction.pieces[payoutFunction.pieces.length - 1].endPoint
+          .eventOutcome,
+        payoutFunction.lastEndpoint.eventOutcome,
+        payoutFunction.pieces[payoutFunction.pieces.length - 1].endPoint
+          .outcomePayout.sats,
+        payoutFunction.lastEndpoint.outcomePayout.sats,
+        totalCollateral,
+        curve,
+        roundingIntervals.intervals,
+      ),
+    );
 
     return mergePayouts(CETS);
   }

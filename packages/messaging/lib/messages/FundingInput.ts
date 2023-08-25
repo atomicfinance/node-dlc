@@ -5,55 +5,27 @@ import {
   StreamReader,
 } from '@node-lightning/bufio';
 
-import { MessageType } from '../MessageType';
 import { IDlcMessage } from './DlcMessage';
-
-export abstract class FundingInput {
-  public static deserialize(buf: Buffer): FundingInputV0 {
-    const reader = new BufferReader(buf);
-
-    const type = Number(reader.readBigSize());
-
-    switch (type) {
-      case MessageType.FundingInputV0:
-        return FundingInputV0.deserialize(buf);
-      default:
-        throw new Error(
-          `FundingInput function TLV type must be FundingInputV0`,
-        );
-    }
-  }
-
-  public abstract type: number;
-
-  public abstract length: bigint;
-
-  public abstract toJSON(): IFundingInputV0JSON;
-
-  public abstract serialize(): Buffer;
-}
+import { FundingInputV0Pre163 } from './pre-163/FundingInput';
 
 /**
  * FundingInput V0 contains information about a specific input to be used
  * in a funding transaction, as well as its corresponding on-chain UTXO.
  */
-export class FundingInputV0 extends FundingInput implements IDlcMessage {
-  public static type = MessageType.FundingInputV0;
-
+export class FundingInput implements IDlcMessage {
   /**
    * Deserializes an funding_input_v0 message
-   * @param buf
+   * @param reader
    */
-  public static deserialize(buf: Buffer): FundingInputV0 {
-    const instance = new FundingInputV0();
-    const reader = new BufferReader(buf);
+  public static deserialize(reader: Buffer | BufferReader): FundingInput {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    reader.readBigSize(); // read type
-    instance.length = reader.readBigSize();
+    const instance = new FundingInput();
+
     instance.inputSerialId = reader.readUInt64BE();
-    const prevTxLen = reader.readUInt16BE();
+    const prevTxLen = reader.readBigSize();
     instance.prevTx = Tx.decode(
-      StreamReader.fromBuffer(reader.readBytes(prevTxLen)),
+      StreamReader.fromBuffer(reader.readBytes(Number(prevTxLen))),
     );
     instance.prevTxVout = reader.readUInt32BE();
     instance.sequence = new Sequence(reader.readUInt32LE());
@@ -64,13 +36,35 @@ export class FundingInputV0 extends FundingInput implements IDlcMessage {
     return instance;
   }
 
+  public static fromPre163(fundingInput: FundingInputV0Pre163): FundingInput {
+    const instance = new FundingInput();
+
+    instance.inputSerialId = fundingInput.inputSerialId;
+    instance.prevTx = fundingInput.prevTx;
+    instance.prevTxVout = fundingInput.prevTxVout;
+    instance.sequence = fundingInput.sequence;
+    instance.maxWitnessLen = fundingInput.maxWitnessLen;
+    instance.redeemScript = fundingInput.redeemScript;
+
+    return instance;
+  }
+
+  public static toPre163(fundingInput: FundingInput): FundingInputV0Pre163 {
+    const instance = new FundingInputV0Pre163();
+
+    instance.inputSerialId = fundingInput.inputSerialId;
+    instance.prevTx = fundingInput.prevTx;
+    instance.prevTxVout = fundingInput.prevTxVout;
+    instance.sequence = fundingInput.sequence;
+    instance.maxWitnessLen = fundingInput.maxWitnessLen;
+    instance.redeemScript = fundingInput.redeemScript;
+
+    return instance;
+  }
+
   /**
    * The type for funding_input_v0 message. funding_input_v0 = 42772
    */
-  public type = FundingInputV0.type;
-
-  public length: bigint;
-
   public inputSerialId: bigint;
 
   public prevTx: Tx;
@@ -104,9 +98,8 @@ export class FundingInputV0 extends FundingInput implements IDlcMessage {
   /**
    * Converts funding_input_v0 to JSON
    */
-  public toJSON(): IFundingInputV0JSON {
+  public toJSON(): IFundingInputJSON {
     return {
-      type: this.type,
       inputSerialId: Number(this.inputSerialId),
       prevTx: this.prevTx.serialize().toString('hex'),
       prevTxVout: this.prevTxVout,
@@ -121,11 +114,10 @@ export class FundingInputV0 extends FundingInput implements IDlcMessage {
    */
   public serialize(): Buffer {
     const writer = new BufferWriter();
-    writer.writeBigSize(this.type);
 
     const dataWriter = new BufferWriter();
     dataWriter.writeUInt64BE(this.inputSerialId);
-    dataWriter.writeUInt16BE(this.prevTx.serialize().length);
+    dataWriter.writeBigSize(this.prevTx.serialize().length);
     dataWriter.writeBytes(this.prevTx.serialize());
     dataWriter.writeUInt32BE(this.prevTxVout);
     dataWriter.writeUInt32BE(this.sequence.value);
@@ -133,15 +125,13 @@ export class FundingInputV0 extends FundingInput implements IDlcMessage {
     dataWriter.writeUInt16BE(this.redeemScript.length);
     dataWriter.writeBytes(this.redeemScript);
 
-    writer.writeBigSize(dataWriter.size);
     writer.writeBytes(dataWriter.toBuffer());
 
     return writer.toBuffer();
   }
 }
 
-export interface IFundingInputV0JSON {
-  type: number;
+export interface IFundingInputJSON {
   inputSerialId: number;
   prevTx: string;
   prevTxVout: number;

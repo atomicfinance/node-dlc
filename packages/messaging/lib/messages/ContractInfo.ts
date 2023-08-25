@@ -1,87 +1,160 @@
 import { BufferReader, BufferWriter } from '@node-lightning/bufio';
+import assert from 'assert';
 
 import { MessageType } from '../MessageType';
-import { getTlv } from '../serialize/getTlv';
 import {
   ContractDescriptor,
-  ContractDescriptorV0JSON,
-  ContractDescriptorV1,
-  ContractDescriptorV1JSON,
+  ContractDescriptorType,
+  IEnumContractDescriptorJSON,
+  INumericContractDescriptorJSON,
+  NumericContractDescriptor,
 } from './ContractDescriptor';
-import { DlcMessage, IDlcMessage } from './DlcMessage';
-import { DigitDecompositionEventDescriptorV0 } from './EventDescriptor';
-import { OracleEventV0 } from './OracleEventV0';
-import { OracleInfoV0, OracleInfoV0JSON } from './OracleInfoV0';
+import { IDlcMessage } from './DlcMessage';
+import {
+  IMultiOracleInfoJSON,
+  ISingleOracleInfoJSON,
+  OracleInfo,
+  OracleInfoType,
+  SingleOracleInfo,
+} from './OracleInfo';
+import {
+  ContractInfoPre163,
+  ContractInfoV0Pre163,
+  ContractInfoV1Pre163,
+} from './pre-163/ContractInfo';
+import { DigitDecompositionEventDescriptorV0Pre167 } from './pre-167/EventDescriptor';
+import { OracleAnnouncementV0Pre167 } from './pre-167/OracleAnnouncement';
+import { OracleEventV0Pre167 } from './pre-167/OracleEvent';
 
-export abstract class ContractInfo extends DlcMessage {
-  public static deserialize(buf: Buffer): ContractInfoV0 | ContractInfoV1 {
-    const reader = new BufferReader(buf);
+export enum ContractInfoType {
+  Single = 0,
+  Disjoint = 1,
+}
+export abstract class ContractInfo implements IDlcMessage {
+  public static deserialize(
+    reader: Buffer | BufferReader,
+  ): SingleContractInfo | DisjointContractInfo {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    const type = Number(reader.readBigSize());
+    const tempReader = new BufferReader(reader.peakBytes());
+    const type = Number(tempReader.readBigSize());
 
     switch (type) {
-      case MessageType.ContractInfoV0:
-        return ContractInfoV0.deserialize(buf);
-      case MessageType.ContractInfoV1:
-        return ContractInfoV1.deserialize(buf);
+      case ContractInfoType.Single:
+        return SingleContractInfo.deserialize(reader);
+      case ContractInfoType.Disjoint:
+        return DisjointContractInfo.deserialize(reader);
       default:
         throw new Error(
-          `Contract info TLV type must be ContractInfoV0 or ContractInfoV1`,
+          `ContractInfo type must be Single or Disjoint. Received ${type}`,
         );
+    }
+  }
+
+  public static fromPre163(
+    contractInfo: ContractInfoPre163,
+  ): SingleContractInfo | DisjointContractInfo {
+    if (contractInfo instanceof ContractInfoV0Pre163) {
+      return SingleContractInfo.fromPre163(contractInfo);
+    } else if (contractInfo instanceof ContractInfoV1Pre163) {
+      return DisjointContractInfo.fromPre163(contractInfo);
+    } else {
+      throw new Error('ContractInfo must be ContractInfoV0 or ContractInfoV1');
+    }
+  }
+
+  public static toPre163(
+    contractInfo: ContractInfo,
+  ): ContractInfoV0Pre163 | ContractInfoV1Pre163 {
+    if (contractInfo instanceof SingleContractInfo) {
+      return SingleContractInfo.toPre163(contractInfo);
+    } else if (contractInfo instanceof DisjointContractInfo) {
+      return DisjointContractInfo.toPre163(contractInfo);
+    } else {
+      throw new Error(
+        'ContractInfo must be SingleContractInfo or DisjointContractInfo',
+      );
     }
   }
 
   public abstract type: number;
 
-  public abstract length: bigint;
-
   public abstract totalCollateral: bigint;
 
   public abstract validate(): void;
 
-  public abstract toJSON(): IContractInfoV0JSON | IContractInfoV1JSON;
+  public abstract toJSON(): ISingleContractInfoJSON | IDisjointContractInfoJSON;
 
   public abstract serialize(): Buffer;
 }
 
 /**
- * ContractInfo V0 contains information about a contract's outcomes,
+ * SingleContractInfo contains information about a contract's outcomes,
  * their corresponding payouts, and the oracles to be used.
  */
-export class ContractInfoV0 implements IDlcMessage {
-  public static type = MessageType.ContractInfoV0;
+export class SingleContractInfo extends ContractInfo implements IDlcMessage {
+  public static type = ContractInfoType.Single;
 
   /**
    * Deserializes an contract_info_v0 message
-   * @param buf
+   * @param reader
    */
-  public static deserialize(buf: Buffer): ContractInfoV0 {
-    const instance = new ContractInfoV0();
-    const reader = new BufferReader(buf);
+  public static deserialize(reader: Buffer | BufferReader): SingleContractInfo {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    reader.readBigSize(); // read type
-    instance.length = reader.readBigSize();
-    instance.totalCollateral = reader.readUInt64BE();
-    instance.contractDescriptor = ContractDescriptor.deserialize(
-      getTlv(reader),
+    const instance = new SingleContractInfo();
+
+    const type = Number(reader.readBigSize());
+    assert(
+      type === this.type,
+      `Expected ContractInfoType.Single, got type ${type}`,
     );
-    instance.oracleInfo = OracleInfoV0.deserialize(getTlv(reader));
+
+    instance.totalCollateral = reader.readUInt64BE();
+    instance.contractDescriptor = ContractDescriptor.deserialize(reader);
+    instance.oracleInfo = OracleInfo.deserialize(reader);
+
+    return instance;
+  }
+
+  public static fromPre163(
+    contractInfo: ContractInfoV0Pre163,
+  ): SingleContractInfo {
+    const instance = new SingleContractInfo();
+
+    instance.totalCollateral = contractInfo.totalCollateral;
+    instance.contractDescriptor = ContractDescriptor.fromPre163(
+      contractInfo.contractDescriptor,
+    );
+    instance.oracleInfo = OracleInfo.fromPre163(contractInfo.oracleInfo);
+
+    return instance;
+  }
+
+  public static toPre163(
+    contractInfo: SingleContractInfo,
+  ): ContractInfoV0Pre163 {
+    const instance = new ContractInfoV0Pre163();
+
+    instance.totalCollateral = contractInfo.totalCollateral;
+    instance.contractDescriptor = ContractDescriptor.toPre163(
+      contractInfo.contractDescriptor,
+    );
+    instance.oracleInfo = OracleInfo.toPre163(contractInfo.oracleInfo);
 
     return instance;
   }
 
   /**
-   * The type for contract_info_v0 message. contract_info_v0 = 55342
+   * The type for single_contract_info message.
    */
-  public type = ContractInfoV0.type;
-
-  public length: bigint;
+  public type = SingleContractInfo.type;
 
   public totalCollateral: bigint;
 
   public contractDescriptor: ContractDescriptor;
 
-  public oracleInfo: OracleInfoV0;
+  public oracleInfo: OracleInfo;
 
   /**
    * Validates correctness of all fields in the message
@@ -91,14 +164,13 @@ export class ContractInfoV0 implements IDlcMessage {
   public validate(): void {
     this.oracleInfo.validate();
     switch (this.contractDescriptor.type) {
-      case MessageType.ContractDescriptorV1:
+      case ContractDescriptorType.Numeric:
         // eslint-disable-next-line no-case-declarations
-        const contractDescriptor = this
-          .contractDescriptor as ContractDescriptorV1;
-        contractDescriptor.validate();
+        const descriptor = this.contractDescriptor as NumericContractDescriptor;
+        descriptor.validate();
 
         // roundingmod should not be greater than totalCollateral
-        for (const interval of contractDescriptor.roundingIntervals.intervals) {
+        for (const interval of descriptor.roundingIntervals.intervals) {
           if (interval.roundingMod > this.totalCollateral) {
             throw new Error(
               `Rounding modulus ${interval.roundingMod} is greater than total collateral ${this.totalCollateral}`,
@@ -106,50 +178,66 @@ export class ContractInfoV0 implements IDlcMessage {
           }
         }
 
-        switch (this.oracleInfo.announcement.oracleEvent.eventDescriptor.type) {
-          case MessageType.DigitDecompositionEventDescriptorV0:
-            // eslint-disable-next-line no-case-declarations
-            const eventDescriptor = this.oracleInfo.announcement.oracleEvent
-              .eventDescriptor as DigitDecompositionEventDescriptorV0;
-            if (eventDescriptor.nbDigits !== contractDescriptor.numDigits)
-              throw new Error(
-                'DigitDecompositionEventDescriptorV0 and ContractDescriptorV1 must have the same numDigits',
-              );
-
-            // Sanity check. Shouldn't be hit since there are other validations which should catch this in OracleEventV0.
-            // eslint-disable-next-line no-case-declarations
-            const oracleEvent = this.oracleInfo.announcement
-              .oracleEvent as OracleEventV0;
-            if (
-              oracleEvent.oracleNonces.length !== contractDescriptor.numDigits
-            ) {
-              throw new Error(
-                'oracleEvent.oracleNonces.length and contractDescriptor.numDigits must be the same',
-              );
-            }
-            break;
-          default:
-            throw new Error(
-              'Only ContractDescriptorV1 can be used with DigitDecompositionEventDescriptor',
+        switch (this.oracleInfo.type) {
+          case OracleInfoType.Single:
+            this.validateOracleAnnouncement(
+              descriptor,
+              (this.oracleInfo as SingleOracleInfo).announcement,
             );
         }
     }
   }
 
+  private validateOracleAnnouncement(
+    descriptor: NumericContractDescriptor,
+    announcement: OracleAnnouncementV0Pre167,
+  ) {
+    // eslint-disable-next-line no-case-declarations
+    const oracleInfo = this.oracleInfo as SingleOracleInfo;
+    switch (oracleInfo.announcement.oracleEvent.eventDescriptor.type) {
+      case MessageType.DigitDecompositionEventDescriptorV0:
+        // eslint-disable-next-line no-case-declarations
+        const eventDescriptor = oracleInfo.announcement.oracleEvent
+          .eventDescriptor as DigitDecompositionEventDescriptorV0Pre167;
+        if (eventDescriptor.nbDigits !== descriptor.numDigits)
+          throw new Error(
+            'DigitDecompositionEventDescriptorV0 and ContractDescriptorV1 must have the same numDigits',
+          );
+
+        // Sanity check. Shouldn't be hit since there are other validations which should catch this in OracleEvent.
+        // eslint-disable-next-line no-case-declarations
+        const oracleEvent = oracleInfo.announcement
+          .oracleEvent as OracleEventV0Pre167;
+        if (oracleEvent.oracleNonces.length !== descriptor.numDigits) {
+          throw new Error(
+            'oracleEvent.oracleNonces.length and contractDescriptor.numDigits must be the same',
+          );
+        }
+        break;
+      default:
+        throw new Error(
+          'Only ContractDescriptorV1 can be used with DigitDecompositionEventDescriptor',
+        );
+    }
+  }
+
   /**
-   * Converts contract_info_v0 to JSON
+   * Converts single_contract_info to JSON
    */
-  public toJSON(): IContractInfoV0JSON {
+  public toJSON(): ISingleContractInfoJSON {
     return {
-      type: this.type,
-      totalCollateral: Number(this.totalCollateral),
-      contractDescriptor: this.contractDescriptor.toJSON(),
-      oracleInfo: this.oracleInfo.toJSON(),
+      singleContractInfo: {
+        totalCollateral: Number(this.totalCollateral),
+        contractInfo: {
+          contractDescriptor: this.contractDescriptor.toJSON(),
+          oracleInfo: this.oracleInfo.toJSON(),
+        },
+      },
     };
   }
 
   /**
-   * Serializes the contract_info_v0 message into a Buffer
+   * Serializes the single_contract_info message into a Buffer
    */
   public serialize(): Buffer {
     const writer = new BufferWriter();
@@ -161,7 +249,6 @@ export class ContractInfoV0 implements IDlcMessage {
     dataWriter.writeBytes(this.contractDescriptor.serialize());
     dataWriter.writeBytes(this.oracleInfo.serialize());
 
-    writer.writeBigSize(dataWriter.size);
     writer.writeBytes(dataWriter.toBuffer());
 
     return writer.toBuffer();
@@ -169,28 +256,35 @@ export class ContractInfoV0 implements IDlcMessage {
 }
 
 /**
- * ContractInfo V1 contains information about a contract's outcomes,
+ * DisjointContractInfo contains information about a contract's outcomes,
  * their corresponding payouts, and the oracles to be used.
  */
-export class ContractInfoV1 implements IDlcMessage {
-  public static type = MessageType.ContractInfoV1;
+export class DisjointContractInfo implements IDlcMessage {
+  public static type = ContractInfoType.Disjoint;
 
   /**
-   * Deserializes an contract_info_v0 message
-   * @param buf
+   * Deserializes an disjoint_contract_info message
+   * @param reader
    */
-  public static deserialize(buf: Buffer): ContractInfoV1 {
-    const instance = new ContractInfoV1();
-    const reader = new BufferReader(buf);
+  public static deserialize(
+    reader: Buffer | BufferReader,
+  ): DisjointContractInfo {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    reader.readBigSize(); // read type
-    instance.length = reader.readBigSize();
+    const instance = new DisjointContractInfo();
+
+    const type = Number(reader.readBigSize());
+    assert(
+      type === this.type,
+      `Expected ContractInfoType.Disjoint, got type ${type}`,
+    );
+
     instance.totalCollateral = reader.readUInt64BE();
 
-    reader.readBigSize(); // read num_disjoint_events
-    while (!reader.eof) {
-      const contractDescriptor = ContractDescriptor.deserialize(getTlv(reader));
-      const oracleInfo = OracleInfoV0.deserialize(getTlv(reader));
+    const numDisjointEvents = reader.readBigSize(); // read num_disjoint_events
+    for (let i = 0; i < numDisjointEvents; i++) {
+      const contractDescriptor = ContractDescriptor.deserialize(reader);
+      const oracleInfo = OracleInfo.deserialize(reader);
 
       instance.contractOraclePairs.push({ contractDescriptor, oracleInfo });
     }
@@ -198,12 +292,48 @@ export class ContractInfoV1 implements IDlcMessage {
     return instance;
   }
 
+  public static fromPre163(
+    contractInfo: ContractInfoV1Pre163,
+  ): DisjointContractInfo {
+    const instance = new DisjointContractInfo();
+
+    instance.totalCollateral = contractInfo.totalCollateral;
+
+    contractInfo.contractOraclePairs.forEach((oraclePair) => {
+      instance.contractOraclePairs.push({
+        contractDescriptor: ContractDescriptor.fromPre163(
+          oraclePair.contractDescriptor,
+        ),
+        oracleInfo: OracleInfo.fromPre163(oraclePair.oracleInfo),
+      });
+    });
+
+    return instance;
+  }
+
+  public static toPre163(
+    contractInfo: DisjointContractInfo,
+  ): ContractInfoV1Pre163 {
+    const instance = new ContractInfoV1Pre163();
+
+    instance.totalCollateral = contractInfo.totalCollateral;
+
+    contractInfo.contractOraclePairs.forEach((oraclePair) => {
+      instance.contractOraclePairs.push({
+        contractDescriptor: ContractDescriptor.toPre163(
+          oraclePair.contractDescriptor,
+        ),
+        oracleInfo: OracleInfo.toPre163(oraclePair.oracleInfo),
+      });
+    });
+
+    return instance;
+  }
+
   /**
    * The type for contract_info_v1 message. contract_info_v0 = 55342
    */
-  public type = ContractInfoV1.type;
-
-  public length: bigint;
+  public type = DisjointContractInfo.type;
 
   public totalCollateral: bigint;
 
@@ -215,54 +345,29 @@ export class ContractInfoV1 implements IDlcMessage {
    * @throws Will throw an error if validation fails
    */
   public validate(): void {
-    this.contractOraclePairs.forEach((oraclePair) => {
-      oraclePair.oracleInfo.validate();
-      switch (oraclePair.contractDescriptor.type) {
-        case MessageType.ContractDescriptorV1:
-          // eslint-disable-next-line no-case-declarations
-          const contractDescriptor = oraclePair.contractDescriptor as ContractDescriptorV1;
-          contractDescriptor.validate();
-
-          switch (
-            oraclePair.oracleInfo.announcement.oracleEvent.eventDescriptor.type
-          ) {
-            case MessageType.DigitDecompositionEventDescriptorV0:
-              // eslint-disable-next-line no-case-declarations
-              const eventDescriptor = oraclePair.oracleInfo.announcement
-                .oracleEvent
-                .eventDescriptor as DigitDecompositionEventDescriptorV0;
-              if (eventDescriptor.nbDigits !== contractDescriptor.numDigits)
-                throw new Error(
-                  'DigitDecompositionEventDescriptorV0 and ContractDescriptorV1 must have the same numDigits',
-                );
-              // eslint-disable-next-line no-case-declarations
-              const oracleEvent = oraclePair.oracleInfo.announcement
-                .oracleEvent as OracleEventV0;
-              if (
-                oracleEvent.oracleNonces.length !== contractDescriptor.numDigits
-              ) {
-                throw new Error(
-                  'oracleEvent.oracleNonces.length and contractDescriptor.numDigits must be the same',
-                );
-              }
-          }
-      }
+    this.contractOraclePairs.forEach((contractOraclePair) => {
+      const instance = new SingleContractInfo();
+      instance.totalCollateral = this.totalCollateral;
+      instance.oracleInfo = contractOraclePair.oracleInfo;
+      instance.contractDescriptor = contractOraclePair.contractDescriptor;
+      instance.validate();
     });
   }
 
   /**
    * Converts contract_info_v1 to JSON
    */
-  public toJSON(): IContractInfoV1JSON {
+  public toJSON(): IDisjointContractInfoJSON {
     return {
-      type: this.type,
-      totalCollateral: Number(this.totalCollateral),
-      contractOraclePairs: this.contractOraclePairs.map((oraclePairs) => {
-        return {
-          contractDescriptor: oraclePairs.contractDescriptor.toJSON(),
-          oracleInfo: oraclePairs.oracleInfo.toJSON(),
-        };
-      }),
+      disjointContractInfo: {
+        totalCollateral: Number(this.totalCollateral),
+        contractInfos: this.contractOraclePairs.map((oraclePairs) => {
+          return {
+            contractDescriptor: oraclePairs.contractDescriptor.toJSON(),
+            oracleInfo: oraclePairs.oracleInfo.toJSON(),
+          };
+        }),
+      },
     };
   }
 
@@ -283,7 +388,6 @@ export class ContractInfoV1 implements IDlcMessage {
       dataWriter.writeBytes(oracleInfo.serialize());
     }
 
-    writer.writeBigSize(dataWriter.size);
     writer.writeBytes(dataWriter.toBuffer());
 
     return writer.toBuffer();
@@ -292,23 +396,26 @@ export class ContractInfoV1 implements IDlcMessage {
 
 interface IContractOraclePair {
   contractDescriptor: ContractDescriptor;
-  oracleInfo: OracleInfoV0;
+  oracleInfo: OracleInfo;
 }
 
 interface IContractOraclePairJSON {
-  contractDescriptor: ContractDescriptorV0JSON | ContractDescriptorV1JSON;
-  oracleInfo: OracleInfoV0JSON;
+  contractDescriptor:
+    | IEnumContractDescriptorJSON
+    | INumericContractDescriptorJSON;
+  oracleInfo: ISingleOracleInfoJSON | IMultiOracleInfoJSON;
 }
 
-export interface IContractInfoV0JSON {
-  type: number;
-  totalCollateral: number;
-  contractDescriptor: ContractDescriptorV0JSON | ContractDescriptorV1JSON;
-  oracleInfo: OracleInfoV0JSON;
+export interface ISingleContractInfoJSON {
+  singleContractInfo: {
+    totalCollateral: number;
+    contractInfo: IContractOraclePairJSON;
+  };
 }
 
-export interface IContractInfoV1JSON {
-  type: number;
-  totalCollateral: number;
-  contractOraclePairs: IContractOraclePairJSON[];
+export interface IDisjointContractInfoJSON {
+  disjointContractInfo: {
+    totalCollateral: number;
+    contractInfos: IContractOraclePairJSON[];
+  };
 }

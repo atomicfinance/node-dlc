@@ -1,37 +1,79 @@
 import { BufferReader, BufferWriter } from '@node-lightning/bufio';
+import assert from 'assert';
+import BigNumber from 'bignumber.js';
 
-import { MessageType } from '../MessageType';
+import {
+  fromPrecision,
+  getIntegerValue,
+  getPrecision,
+} from '../utils/precision';
 import { IDlcMessage } from './DlcMessage';
+import {
+  HyperbolaPayoutCurvePiecePre163,
+  PayoutCurvePiecePre163,
+  PolynomialPayoutCurvePiecePre163,
+} from './pre-163/PayoutCurvePiece';
+
+export enum PayoutCurvePieceType {
+  PolynomialPayoutCurvePiece = 0,
+  HyperbolaPayoutCurvePiece = 1,
+}
 
 export abstract class PayoutCurvePiece {
   public static deserialize(
-    buf: Buffer,
+    reader: Buffer | BufferReader,
   ): PolynomialPayoutCurvePiece | HyperbolaPayoutCurvePiece {
-    const reader = new BufferReader(buf);
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    const type = Number(reader.readBigSize());
+    const tempReader = new BufferReader(reader.peakBytes());
+
+    const type = Number(tempReader.readBigSize());
 
     switch (type) {
-      case MessageType.PolynomialPayoutCurvePiece:
-        return PolynomialPayoutCurvePiece.deserialize(buf);
-      case MessageType.HyperbolaPayoutCurvePiece:
-        return HyperbolaPayoutCurvePiece.deserialize(buf);
-      case MessageType.OldHyperbolaPayoutCurvePiece:
-        return HyperbolaPayoutCurvePiece.deserialize(buf);
+      case PayoutCurvePieceType.PolynomialPayoutCurvePiece:
+        return PolynomialPayoutCurvePiece.deserialize(reader);
+      case PayoutCurvePieceType.HyperbolaPayoutCurvePiece:
+        return HyperbolaPayoutCurvePiece.deserialize(reader);
       default:
         throw new Error(
-          `Payout function TLV type must be PolynomialPayoutCurvePiece or HyperbolaPayoutCurvePiece`,
+          `Payout function type must be PolynomialPayoutCurvePiece or HyperbolaPayoutCurvePiece`,
         );
+    }
+  }
+
+  public static fromPre163(
+    payoutCurvePiece: PayoutCurvePiecePre163,
+  ): PolynomialPayoutCurvePiece | HyperbolaPayoutCurvePiece {
+    if (payoutCurvePiece instanceof PolynomialPayoutCurvePiecePre163) {
+      return PolynomialPayoutCurvePiece.fromPre163(payoutCurvePiece);
+    } else if (payoutCurvePiece instanceof HyperbolaPayoutCurvePiecePre163) {
+      return HyperbolaPayoutCurvePiece.fromPre163(payoutCurvePiece);
+    } else {
+      throw new Error(
+        'Payout Curve Piece must be PolynomialPayoutCurvePiecePre163 or HyperbolaPayoutCurvePiecePre163',
+      );
+    }
+  }
+
+  public static toPre163(
+    payoutCurvePiece: PayoutCurvePiece,
+  ): PolynomialPayoutCurvePiecePre163 | HyperbolaPayoutCurvePiecePre163 {
+    if (payoutCurvePiece instanceof PolynomialPayoutCurvePiece) {
+      return PolynomialPayoutCurvePiece.toPre163(payoutCurvePiece);
+    } else if (payoutCurvePiece instanceof HyperbolaPayoutCurvePiece) {
+      return HyperbolaPayoutCurvePiece.toPre163(payoutCurvePiece);
+    } else {
+      throw new Error(
+        'Payout Curve Piece must be PolynomialPayoutCurvePiece or HyperbolaPayoutCurvePiece',
+      );
     }
   }
 
   public abstract type: number;
 
-  public abstract length: bigint;
-
   public abstract toJSON():
-    | PolynomialPayoutCurvePieceJSON
-    | HyperbolaPayoutCurvePieceJSON;
+    | IPolynomialPayoutCurvePieceJSON
+    | IHyperbolaPayoutCurvePieceJSON;
 
   public abstract serialize(): Buffer;
 }
@@ -42,23 +84,30 @@ export abstract class PayoutCurvePiece {
 export class PolynomialPayoutCurvePiece
   extends PayoutCurvePiece
   implements IDlcMessage {
-  public static type = MessageType.PolynomialPayoutCurvePiece;
+  public static type = PayoutCurvePieceType.PolynomialPayoutCurvePiece;
 
   /**
    * Deserializes an polynomial_payout_curve_piece message
-   * @param buf
+   * @param reader
    */
-  public static deserialize(buf: Buffer): PolynomialPayoutCurvePiece {
+  public static deserialize(
+    reader: Buffer | BufferReader,
+  ): PolynomialPayoutCurvePiece {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
+
     const instance = new PolynomialPayoutCurvePiece();
-    const reader = new BufferReader(buf);
 
-    reader.readBigSize(); // read type
-    instance.length = reader.readBigSize(); // need to fix this
-    reader.readUInt16BE(); // num_pts
+    const type = Number(reader.readBigSize());
+    assert(
+      type === this.type,
+      `Expected PayoutCurvePieceType.PolynomialPayoutCurvePiece, got type ${type}`,
+    );
 
-    while (!reader.eof) {
-      const eventOutcome = reader.readBigSize();
-      const outcomePayout = reader.readBigSize();
+    const numPoints = reader.readBigSize(); // num_pts
+
+    for (let i = 0; i < numPoints; i++) {
+      const eventOutcome = reader.readUInt64BE();
+      const outcomePayout = reader.readUInt64BE();
       const extraPrecision = reader.readUInt16BE();
 
       instance.points.push({
@@ -71,28 +120,63 @@ export class PolynomialPayoutCurvePiece
     return instance;
   }
 
+  public static fromPre163(
+    polynomialPayoutCurvePiece: PolynomialPayoutCurvePiecePre163,
+  ): PolynomialPayoutCurvePiece {
+    const instance = new PolynomialPayoutCurvePiece();
+
+    instance.points = polynomialPayoutCurvePiece.points.map((point) => {
+      return {
+        eventOutcome: point.eventOutcome,
+        outcomePayout: point.outcomePayout,
+        extraPrecision: point.extraPrecision,
+      };
+    });
+
+    return instance;
+  }
+
+  public static toPre163(
+    polynomialPayoutCurvePiece: PolynomialPayoutCurvePiece,
+  ): PolynomialPayoutCurvePiecePre163 {
+    const instance = new PolynomialPayoutCurvePiecePre163();
+
+    instance.points = polynomialPayoutCurvePiece.points.map((point) => {
+      return {
+        eventOutcome: point.eventOutcome,
+        outcomePayout: point.outcomePayout,
+        extraPrecision: point.extraPrecision,
+      };
+    });
+
+    return instance;
+  }
+
   /**
    * The type for polynomial_payout_curve_piece message. polynomial_payout_curve_piece = ???
    */
   public type = PolynomialPayoutCurvePiece.type;
 
-  public length: bigint;
-
   public points: IPoint[] = [];
+
+  public migrate(): PolynomialPayoutCurvePiece {
+    return this;
+  }
 
   /**
    * Converts polynomial_payout_curve_piece to JSON
    */
-  public toJSON(): PolynomialPayoutCurvePieceJSON {
+  public toJSON(): IPolynomialPayoutCurvePieceJSON {
     return {
-      type: this.type,
-      points: this.points.map((point) => {
-        return {
-          eventOutcome: Number(point.eventOutcome),
-          outcomePayout: Number(point.outcomePayout),
-          extraPrecision: Number(point.extraPrecision),
-        };
-      }),
+      polynomialPayoutCurvePiece: {
+        payoutPoints: this.points.map((point) => {
+          return {
+            eventOutcome: Number(point.eventOutcome),
+            outcomePayout: Number(point.outcomePayout),
+            extraPrecision: Number(point.extraPrecision),
+          };
+        }),
+      },
     };
   }
 
@@ -104,15 +188,14 @@ export class PolynomialPayoutCurvePiece
     writer.writeBigSize(this.type);
 
     const dataWriter = new BufferWriter();
-    dataWriter.writeUInt16BE(this.points.length);
+    dataWriter.writeBigSize(this.points.length);
 
     for (const point of this.points) {
-      dataWriter.writeBigSize(point.eventOutcome);
-      dataWriter.writeBigSize(point.outcomePayout);
+      dataWriter.writeUInt64BE(point.eventOutcome);
+      dataWriter.writeUInt64BE(point.outcomePayout);
       dataWriter.writeUInt16BE(point.extraPrecision);
     }
 
-    writer.writeBigSize(dataWriter.size);
     writer.writeBytes(dataWriter.toBuffer());
 
     return writer.toBuffer();
@@ -125,37 +208,94 @@ export class PolynomialPayoutCurvePiece
 export class HyperbolaPayoutCurvePiece
   extends PayoutCurvePiece
   implements IDlcMessage {
-  public static type = MessageType.HyperbolaPayoutCurvePiece;
+  public static type = PayoutCurvePieceType.HyperbolaPayoutCurvePiece;
+  public static points = [
+    'translateOutcome',
+    'translatePayout',
+    'a',
+    'b',
+    'c',
+    'd',
+  ];
 
   /**
    * Deserializes an hyperbola_payout_curve_piece message
    * @param buf
    */
-  public static deserialize(buf: Buffer): HyperbolaPayoutCurvePiece {
-    const instance = new HyperbolaPayoutCurvePiece();
-    const reader = new BufferReader(buf);
+  public static deserialize(
+    reader: Buffer | BufferReader,
+  ): HyperbolaPayoutCurvePiece {
+    if (reader instanceof Buffer) reader = new BufferReader(reader);
 
-    reader.readBigSize(); // read type
-    instance.length = reader.readBigSize(); // need to fix this
+    const instance = new HyperbolaPayoutCurvePiece();
+
+    const type = Number(reader.readBigSize());
+    assert(
+      type === this.type,
+      `Expected PayoutCurvePieceType.HyperbolaPayoutCurvePiece, got type ${type}`,
+    );
+
     instance.usePositivePiece = reader.readUInt8() === 1;
-    instance.translateOutcomeSign = reader.readUInt8() === 1;
-    instance.translateOutcome = reader.readBigSize();
-    instance.translateOutcomeExtraPrecision = reader.readUInt16BE();
-    instance.translatePayoutSign = reader.readUInt8() === 1;
-    instance.translatePayout = reader.readBigSize();
-    instance.translatePayoutExtraPrecision = reader.readUInt16BE();
-    instance.aSign = reader.readUInt8() === 1;
-    instance.a = reader.readBigSize();
-    instance.aExtraPrecision = reader.readUInt16BE();
-    instance.bSign = reader.readUInt8() === 1;
-    instance.b = reader.readBigSize();
-    instance.bExtraPrecision = reader.readUInt16BE();
-    instance.cSign = reader.readUInt8() === 1;
-    instance.c = reader.readBigSize();
-    instance.cExtraPrecision = reader.readUInt16BE();
-    instance.dSign = reader.readUInt8() === 1;
-    instance.d = reader.readBigSize();
-    instance.dExtraPrecision = reader.readUInt16BE();
+
+    const points = HyperbolaPayoutCurvePiece.points;
+
+    for (let i = 0; i < points.length; i++) {
+      const point = points[i];
+
+      const sign = reader.readUInt8() === 1;
+      const value = reader.readUInt64BE();
+      const precision = reader.readUInt16BE();
+
+      instance[point] = this.computePoint(sign, value, precision);
+    }
+
+    return instance;
+  }
+
+  public static fromPre163(
+    hyperbolaPayoutCurvePiece: HyperbolaPayoutCurvePiecePre163,
+  ): HyperbolaPayoutCurvePiece {
+    const instance = new HyperbolaPayoutCurvePiece();
+
+    instance.usePositivePiece = hyperbolaPayoutCurvePiece.usePositivePiece;
+
+    const points = HyperbolaPayoutCurvePiece.points;
+
+    for (let i = 0; i < points.length; i++) {
+      const point = points[i];
+
+      const sign: boolean = hyperbolaPayoutCurvePiece[`${point}Sign`];
+      const value: bigint = hyperbolaPayoutCurvePiece[point];
+      const precision: number =
+        hyperbolaPayoutCurvePiece[`${point}ExtraPrecision`];
+
+      instance[point] = this.computePoint(sign, value, precision);
+    }
+
+    return instance;
+  }
+
+  public static toPre163(
+    hyperbolaPayoutCurvePiece: HyperbolaPayoutCurvePiece,
+  ): HyperbolaPayoutCurvePiecePre163 {
+    const instance = new HyperbolaPayoutCurvePiecePre163();
+
+    instance.usePositivePiece = hyperbolaPayoutCurvePiece.usePositivePiece;
+
+    const points = HyperbolaPayoutCurvePiece.points;
+
+    for (let i = 0; i < points.length; i++) {
+      const point = points[i];
+      instance[`${point}Sign`] = hyperbolaPayoutCurvePiece[point].gte(
+        new BigNumber(0),
+      );
+      instance[point] = BigInt(
+        getIntegerValue(hyperbolaPayoutCurvePiece[point]),
+      );
+      instance[`${point}ExtraPrecision`] = getPrecision(
+        hyperbolaPayoutCurvePiece[point],
+      );
+    }
 
     return instance;
   }
@@ -165,72 +305,62 @@ export class HyperbolaPayoutCurvePiece
    */
   public type = HyperbolaPayoutCurvePiece.type;
 
-  public length: bigint;
-
   public usePositivePiece: boolean;
 
-  public translateOutcomeSign: boolean;
+  public translateOutcome: BigNumber;
 
-  public translateOutcome: bigint;
+  public translatePayout: BigNumber;
 
-  public translateOutcomeExtraPrecision: number;
+  public a: BigNumber;
 
-  public translatePayoutSign: boolean;
+  public b: BigNumber;
 
-  public translatePayout: bigint;
+  public c: BigNumber;
 
-  public translatePayoutExtraPrecision: number;
-
-  public aSign: boolean;
-
-  public a: bigint;
-
-  public aExtraPrecision: number;
-
-  public bSign: boolean;
-
-  public b: bigint;
-
-  public bExtraPrecision: number;
-
-  public cSign: boolean;
-
-  public c: bigint;
-
-  public cExtraPrecision: number;
-
-  public dSign: boolean;
-
-  public d: bigint;
-
-  public dExtraPrecision: number;
+  public d: BigNumber;
 
   /**
    * Converts hyperbola_payout_curve_piece to JSON
    */
-  public toJSON(): HyperbolaPayoutCurvePieceJSON {
+  public toJSON(): IHyperbolaPayoutCurvePieceJSON {
     return {
-      type: this.type,
-      usePositivePiece: this.usePositivePiece,
-      translateOutcomeSign: this.translateOutcomeSign,
-      translateOutcome: Number(this.translateOutcome),
-      translateOutcomeExtraPrecision: this.translateOutcomeExtraPrecision,
-      translatePayoutSign: this.translatePayoutSign,
-      translatePayout: Number(this.translatePayout),
-      translatePayoutExtraPrecision: this.translatePayoutExtraPrecision,
-      aSign: this.aSign,
-      a: Number(this.a),
-      aExtraPrecision: this.aExtraPrecision,
-      bSign: this.bSign,
-      b: Number(this.b),
-      bExtraPrecision: this.bExtraPrecision,
-      cSign: this.cSign,
-      c: Number(this.c),
-      cExtraPrecision: this.cExtraPrecision,
-      dSign: this.dSign,
-      d: Number(this.d),
-      dExtraPrecision: this.dExtraPrecision,
+      hyperbolaPayoutCurvePiece: {
+        usePositivePiece: this.usePositivePiece,
+        translateOutcome: this.translateOutcome.toNumber(),
+        translatePayout: this.translatePayout.toNumber(),
+        a: this.a.toNumber(),
+        b: this.b.toNumber(),
+        c: this.c.toNumber(),
+        d: this.d.toNumber(),
+      },
     };
+  }
+
+  /**
+   *
+   * https://github.com/discreetlogcontracts/dlcspecs/blob/740045234f610ea30e52d5880312a949b0d5e21d/PayoutCurve.md#curve-serialization
+   *
+   * @param sign
+   * @param value
+   * @param precision
+   * @returns
+   */
+  public calculatePoint(
+    sign: boolean,
+    value: bigint,
+    precision: number,
+  ): number {
+    return (sign ? 1 : -1) * (Number(value) + precision / (1 << 16));
+  }
+
+  public static computePoint(
+    sign: boolean,
+    value: bigint,
+    precision: number,
+  ): BigNumber {
+    return new BigNumber(value.toString())
+      .plus(fromPrecision(precision))
+      .times(sign ? 1 : -1);
   }
 
   /**
@@ -243,32 +373,21 @@ export class HyperbolaPayoutCurvePiece
     const dataWriter = new BufferWriter();
 
     dataWriter.writeUInt8(this.usePositivePiece ? 1 : 0);
-    dataWriter.writeUInt8(this.translateOutcomeSign ? 1 : 0);
-    dataWriter.writeBigSize(this.translateOutcome);
-    dataWriter.writeUInt16BE(this.translateOutcomeExtraPrecision);
-    dataWriter.writeUInt8(this.translatePayoutSign ? 1 : 0);
-    dataWriter.writeBigSize(this.translatePayout);
-    dataWriter.writeUInt16BE(this.translatePayoutExtraPrecision);
-    dataWriter.writeUInt8(this.aSign ? 1 : 0);
-    dataWriter.writeBigSize(this.a);
-    dataWriter.writeUInt16BE(this.aExtraPrecision);
-    dataWriter.writeUInt8(this.bSign ? 1 : 0);
-    dataWriter.writeBigSize(this.b);
-    dataWriter.writeUInt16BE(this.bExtraPrecision);
-    dataWriter.writeUInt8(this.cSign ? 1 : 0);
-    dataWriter.writeBigSize(this.c);
-    dataWriter.writeUInt16BE(this.cExtraPrecision);
-    dataWriter.writeUInt8(this.dSign ? 1 : 0);
-    dataWriter.writeBigSize(this.d);
-    dataWriter.writeUInt16BE(this.dExtraPrecision);
 
-    writer.writeBigSize(dataWriter.size);
+    const points = HyperbolaPayoutCurvePiece.points;
+    for (let i = 0; i < points.length; i++) {
+      const point = points[i];
+
+      dataWriter.writeUInt8(this[point].isPositive() ? 1 : 0);
+      dataWriter.writeUInt64BE(getIntegerValue(this[point]));
+      dataWriter.writeUInt16BE(getPrecision(this[point]));
+    }
+
     writer.writeBytes(dataWriter.toBuffer());
 
     return writer.toBuffer();
   }
 }
-
 interface IPoint {
   eventOutcome: bigint;
   outcomePayout: bigint;
@@ -281,30 +400,20 @@ interface IPointJSON {
   extraPrecision: number;
 }
 
-export interface PolynomialPayoutCurvePieceJSON {
-  type: number;
-  points: IPointJSON[];
+export interface IPolynomialPayoutCurvePieceJSON {
+  polynomialPayoutCurvePiece: {
+    payoutPoints: IPointJSON[];
+  };
 }
 
-export interface HyperbolaPayoutCurvePieceJSON {
-  type: number;
-  usePositivePiece: boolean;
-  translateOutcomeSign: boolean;
-  translateOutcome: number;
-  translateOutcomeExtraPrecision: number;
-  translatePayoutSign: boolean;
-  translatePayout: number;
-  translatePayoutExtraPrecision: number;
-  aSign: boolean;
-  a: number;
-  aExtraPrecision: number;
-  bSign: boolean;
-  b: number;
-  bExtraPrecision: number;
-  cSign: boolean;
-  c: number;
-  cExtraPrecision: number;
-  dSign: boolean;
-  d: number;
-  dExtraPrecision: number;
+export interface IHyperbolaPayoutCurvePieceJSON {
+  hyperbolaPayoutCurvePiece: {
+    usePositivePiece: boolean;
+    translateOutcome: number;
+    translatePayout: number;
+    a: number;
+    b: number;
+    c: number;
+    d: number;
+  };
 }

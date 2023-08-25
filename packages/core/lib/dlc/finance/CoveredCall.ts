@@ -1,4 +1,5 @@
-import { PayoutFunctionV0 } from '@node-dlc/messaging';
+import { PayoutFunction } from '@node-dlc/messaging';
+import { Value } from '@node-dlc/bitcoin';
 import BN from 'bignumber.js';
 
 import { toBigInt } from '../../utils/BigIntUtils';
@@ -57,7 +58,7 @@ const buildPayoutFunction = (
   contractSize: bigint,
   oracleBase: number,
   oracleDigits: number,
-): { payoutFunction: PayoutFunctionV0; totalCollateral: bigint } => {
+): { payoutFunction: PayoutFunction; totalCollateral: bigint } => {
   const { maxOutcome, totalCollateral, payoutCurve } = buildCurve(
     strikePrice,
     contractSize,
@@ -65,17 +66,19 @@ const buildPayoutFunction = (
     oracleDigits,
   );
 
-  const payoutFunction = new PayoutFunctionV0();
-  payoutFunction.endpoint0 = BigInt(0);
-  payoutFunction.endpointPayout0 = totalCollateral;
-  payoutFunction.extraPrecision0 = 0;
-
+  const payoutFunction = new PayoutFunction();
   payoutFunction.pieces.push({
     payoutCurvePiece: payoutCurve.toPayoutCurvePiece(),
-    endpoint: maxOutcome,
-    endpointPayout: BigInt(0),
-    extraPrecision: 0,
+    endPoint: {
+      eventOutcome: BigInt(0),
+      outcomePayout: Value.fromSats(totalCollateral),
+      extraPrecision: 0,
+    },
   });
+
+  payoutFunction.lastEndpoint.eventOutcome = maxOutcome;
+  payoutFunction.lastEndpoint.outcomePayout = Value.zero();
+  payoutFunction.lastEndpoint.extraPrecision = 0;
 
   return {
     payoutFunction,

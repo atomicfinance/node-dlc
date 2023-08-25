@@ -1,14 +1,19 @@
 import {
-  ContractDescriptorV1,
+  NumericContractDescriptor,
+  ContractDescriptorType,
   ContractInfo,
-  ContractInfoV0,
-  DigitDecompositionEventDescriptorV0,
+  SingleContractInfo,
+  ContractInfoType,
+  DigitDecompositionEventDescriptorV0Pre167,
   HyperbolaPayoutCurvePiece,
+  PayoutCurvePieceType,
   MessageType,
-  PayoutFunctionV0,
+  PayoutFunction,
+  SingleOracleInfo,
 } from '@node-dlc/messaging';
-import BN from 'bignumber.js';
+import BigNumber from 'bignumber.js';
 
+import { toBigInt } from '../../utils/BigIntUtils';
 import { HyperbolaPayoutCurve } from '../HyperbolaPayoutCurve';
 import { CoveredCall } from './CoveredCall';
 import { ShortPut } from './ShortPut';
@@ -21,8 +26,8 @@ export interface OptionInfo {
   expiry: Date;
 }
 
-export type HasOfferCollateralSatoshis = {
-  offerCollateralSatoshis: bigint;
+export type HasOfferCollateral = {
+  offerCollateral: bigint;
 };
 
 export type HasContractInfo = {
@@ -38,18 +43,18 @@ export type OptionType = 'put' | 'call';
 export function getOptionInfoFromContractInfo(
   _contractInfo: ContractInfo,
 ): OptionInfo {
-  if (_contractInfo.type !== MessageType.ContractInfoV0)
-    throw Error('Only ContractInfoV0 currently supported');
+  if (_contractInfo.type !== ContractInfoType.Single)
+    throw Error('Only Single ContractInfo currently supported');
 
-  const contractInfo = _contractInfo as ContractInfoV0;
-  if (contractInfo.contractDescriptor.type !== MessageType.ContractDescriptorV1)
-    throw Error('Only ContractDescriptorV1 currently supported');
+  const contractInfo = _contractInfo as SingleContractInfo;
+  if (contractInfo.contractDescriptor.type !== ContractDescriptorType.Numeric)
+    throw Error('Only Numeric ContractDescriptor currently supported');
 
-  const oracleInfo = contractInfo.oracleInfo;
+  const oracleInfo = contractInfo.oracleInfo as SingleOracleInfo;
   const { eventMaturityEpoch } = oracleInfo.announcement.oracleEvent;
 
   const eventDescriptor = oracleInfo.announcement.oracleEvent
-    .eventDescriptor as DigitDecompositionEventDescriptorV0;
+    .eventDescriptor as DigitDecompositionEventDescriptorV0Pre167;
   const { base: oracleBase, nbDigits: oracleDigits } = eventDescriptor;
   if (
     oracleInfo.announcement.oracleEvent.eventDescriptor.type !==
@@ -57,11 +62,11 @@ export function getOptionInfoFromContractInfo(
   )
     throw Error('Only DigitDecompositionEventDescriptorV0 currently supported');
 
-  const contractDescriptor = contractInfo.contractDescriptor as ContractDescriptorV1;
+  const contractDescriptor = contractInfo.contractDescriptor as NumericContractDescriptor;
   if (contractDescriptor.payoutFunction.type !== MessageType.PayoutFunctionV0)
     throw Error('Only PayoutFunctionV0 currently supported');
 
-  const payoutFunction = contractDescriptor.payoutFunction as PayoutFunctionV0;
+  const payoutFunction = contractDescriptor.payoutFunction as PayoutFunction;
   if (payoutFunction.pieces.length === 0)
     throw Error('PayoutFunction must have at least once PayoutCurvePiece');
   if (payoutFunction.pieces.length > 1)
@@ -69,31 +74,31 @@ export function getOptionInfoFromContractInfo(
 
   const payoutCurvePiece = payoutFunction.pieces[0]
     .payoutCurvePiece as HyperbolaPayoutCurvePiece;
-  if (
-    payoutCurvePiece.type !== MessageType.HyperbolaPayoutCurvePiece &&
-    payoutCurvePiece.type !== MessageType.OldHyperbolaPayoutCurvePiece
-  )
+  if (payoutCurvePiece.type !== PayoutCurvePieceType.HyperbolaPayoutCurvePiece)
     throw Error('Must be HyperbolaPayoutCurvePiece');
-  if (payoutCurvePiece.b !== BigInt(0) || payoutCurvePiece.c !== BigInt(0))
+  if (
+    !payoutCurvePiece.b.eq(new BigNumber(0)) ||
+    !payoutCurvePiece.c.eq(new BigNumber(0))
+  )
     throw Error('b and c HyperbolaPayoutCurvePiece values must be 0');
 
   const curve = HyperbolaPayoutCurve.fromPayoutCurvePiece(payoutCurvePiece);
   const maxOutcome = BigInt(
-    new BN(oracleBase).pow(oracleDigits).minus(1).toString(10),
+    new BigNumber(oracleBase).pow(oracleDigits).minus(1).toString(10),
   );
   const isAscending = curve
     .getPayout(maxOutcome)
-    .gt(Number(payoutFunction.endpointPayout0));
+    .gt(Number(payoutFunction.pieces[0].endPoint.outcomePayout));
 
   const expiry = new Date(eventMaturityEpoch * 1000);
   const totalCollateral = contractInfo.totalCollateral;
 
   // if curve is ascending, assume it is a put.
   const contractSize = isAscending
-    ? payoutCurvePiece.translatePayout - totalCollateral
-    : totalCollateral + payoutCurvePiece.translatePayout;
+    ? toBigInt(payoutCurvePiece.translatePayout.abs()) - totalCollateral
+    : totalCollateral + toBigInt(payoutCurvePiece.translatePayout.abs());
 
-  const strikePrice = payoutCurvePiece.d / contractSize;
+  const strikePrice = toBigInt(payoutCurvePiece.d) / contractSize;
 
   // rebuild payout curve from option info and perform a sanity check
   const { payoutCurve: sanityCurve } = isAscending
@@ -121,7 +126,7 @@ export function getOptionInfoFromContractInfo(
 }
 
 export function getOptionInfoFromOffer(
-  offer: HasOfferCollateralSatoshis & HasContractInfo & HasType,
+  offer: HasOfferCollateral & HasContractInfo & HasType,
 ): OptionInfo {
   if (
     offer.type !== MessageType.DlcOfferV0 &&
@@ -130,7 +135,7 @@ export function getOptionInfoFromOffer(
     throw Error('Only DlcOfferV0 and OrderOfferV0 currently supported');
 
   const premium =
-    offer.contractInfo.totalCollateral - offer.offerCollateralSatoshis;
+    offer.contractInfo.totalCollateral - offer.offerCollateral;
 
   return {
     ...getOptionInfoFromContractInfo(offer.contractInfo),
